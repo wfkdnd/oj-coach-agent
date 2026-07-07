@@ -14,4 +14,9 @@ def list_dir(path: str = ".") -> str:
     #   2. os.listdir，排序
     #   3. 对每个条目标注 [文件] 或 [目录]
     #   4. 返回格式化字符串
-    raise NotImplementedError
+    if not os.path.isdir(path):
+        return f"❌ 不是目录: {path}"
+    
+    files = os.listdir(path)
+    files.sort()
+    return "\n".join(f"[{'文件' if os.path.isfile(os.path.join(path, file)) else '目录'}] {file}" for file in files)
