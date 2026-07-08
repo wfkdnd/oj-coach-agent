@@ -8,6 +8,7 @@ from tools import ToolRegistry
 from oj_tools.analyze_problem import analyze_problem
 from oj_tools.read_code_file import read_code, read_code_file
 from oj_tools.read_problem_file import read_problem, read_problem_file
+from oj_tools.run_oj_code import run_oj_code
 
 
 def build_oj_tools() -> ToolRegistry:
@@ -18,6 +19,7 @@ def build_oj_tools() -> ToolRegistry:
     registry.register(analyze_problem)
     registry.register(read_code)
     registry.register(read_code_file)
+    registry.register(run_oj_code)
     return registry
 
 
@@ -28,4 +30,5 @@ __all__ = [
     "analyze_problem",
     "read_code",
     "read_code_file",
+    "run_oj_code",
 ]

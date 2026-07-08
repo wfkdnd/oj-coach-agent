@@ -117,11 +117,37 @@ def analyze_problem(problem_text: str) -> str:
         "输出描述": sections.get("输出描述", ""),
         "约束": constraints,
         "样例": samples,
+        "测试用例": _build_problem_test_cases(samples),
         "输入类型判断": input_types,
         "算法候选": candidates,
         "学习建议": _build_learning_advice(candidates, constraints),
     }
     return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+def extract_problem_test_cases(problem_text: str) -> list[dict[str, str]]:
+    """从题目文本中提取可直接运行的样例测试用例。"""
+    normalized_text = _normalize_text(problem_text)
+    if not normalized_text:
+        return []
+    return _build_problem_test_cases(_extract_samples(normalized_text))
+
+
+def _build_problem_test_cases(samples: list[dict[str, str]]) -> list[dict[str, str]]:
+    test_cases = []
+    for index, sample in enumerate(samples, start=1):
+        stdin = sample.get("输入", "").strip()
+        expected_output = sample.get("输出", "").strip()
+        if stdin or expected_output:
+            test_cases.append(
+                {
+                    "名称": f"题目样例 {index}",
+                    "来源": "题目样例",
+                    "stdin": stdin,
+                    "expected_output": expected_output,
+                }
+            )
+    return test_cases
 
 
 def _normalize_text(text: str) -> str:
