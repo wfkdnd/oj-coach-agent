@@ -6,9 +6,11 @@ OJ 专用工具注册入口。
 
 from tools import ToolRegistry
 from oj_tools.analyze_problem import analyze_problem
+from oj_tools.compare_output import compare_output
 from oj_tools.read_code_file import read_code, read_code_file
 from oj_tools.read_problem_file import read_problem, read_problem_file
 from oj_tools.run_oj_code import run_oj_code
+from oj_tools.summarize_practice import summarize_practice
 
 
 def build_oj_tools() -> ToolRegistry:
@@ -20,6 +22,8 @@ def build_oj_tools() -> ToolRegistry:
     registry.register(read_code)
     registry.register(read_code_file)
     registry.register(run_oj_code)
+    registry.register(compare_output)
+    registry.register(summarize_practice)
     return registry
 
 
@@ -31,4 +35,6 @@ __all__ = [
     "read_code",
     "read_code_file",
     "run_oj_code",
+    "compare_output",
+    "summarize_practice",
 ]
