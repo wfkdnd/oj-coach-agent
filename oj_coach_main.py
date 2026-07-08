@@ -1,0 +1,529 @@
+"""
+OJ Coach 专用终端入口。
+
+这个入口与通用 main.py 分开：它不让模型自由选择工具，而是用明确的
+`/` 命令维护刷题状态，再把状态交给 oj_tools 中的确定性工具处理。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import shlex
+import sys
+from typing import Any
+
+from oj_tools import build_oj_tools
+
+
+END_MARKER = "END"
+DEFAULT_TIMEOUT_MS = 3000
+MAX_CONTEXT_CHARS = 6000
+
+OJ_COACH_SYSTEM_PROMPT = """\
+你是算法刷题陪练 Agent。
+
+你的目标不是直接给最终答案，而是陪用户完成：
+读题 -> 写代码 -> 运行 -> 定位错误 -> 修正 -> 复盘。
+
+回答规范：
+- 优先基于当前题目、代码、输入、期望输出和最近一次真实运行结果回答。
+- 不要捏造运行结果；只有上下文里已有 run_oj_code 的结果时，才能称为运行结果。
+- 对编译错误、运行错误、Wrong Answer、TLE 要翻译成人话。
+- 默认先给方向、关键观察和定位建议；用户明确要求完整代码时再给完整代码。
+- 不保存用户完整代码或敏感信息。
+"""
+
+
+@dataclass
+class OJCoachState:
+    problem_text: str = ""
+    language: str = ""
+    code: str = ""
+    stdin: str = ""
+    expected_output: str = ""
+    test_cases: str = ""
+    last_run_result: str = ""
+    analysis_result: str = ""
+    timeout_ms: int = DEFAULT_TIMEOUT_MS
+
+
+def main() -> None:
+    _configure_utf8_output()
+    state = OJCoachState()
+    tools = build_oj_tools()
+
+    print("OJ Coach Agent")
+    print("=" * 50)
+    print("输入 /help 查看命令，输入 /exit 退出。")
+    print("安全提示：/run 会执行当前代码，请只运行可信代码。")
+
+    while True:
+        try:
+            raw = input("\noj> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n已退出。")
+            return
+
+        if not raw:
+            continue
+        if not raw.startswith("/"):
+            print("请输入以 / 开头的命令。可用 /help 查看帮助。")
+            continue
+
+        command, args = _parse_command(raw)
+        if command in {"exit", "quit"}:
+            print("已退出。")
+            return
+
+        try:
+            _handle_command(command, args, state, tools)
+        except Exception as exc:
+            print(f"错误：命令执行失败：{exc}")
+
+
+def _handle_command(command: str, args: str, state: OJCoachState, tools: Any) -> None:
+    if command in {"help", "h", "?"}:
+        _print_help()
+    elif command == "status":
+        _print_status(state)
+    elif command == "paste_problem":
+        _cmd_paste_problem(state, tools)
+    elif command == "load_problem":
+        _cmd_load_problem(args, state, tools)
+    elif command == "analyze":
+        _cmd_analyze(state, tools)
+    elif command == "paste_code":
+        _cmd_paste_code(args, state, tools)
+    elif command == "load_code":
+        _cmd_load_code(args, state, tools)
+    elif command == "set_stdin":
+        _cmd_set_stdin(state)
+    elif command == "set_expected":
+        _cmd_set_expected(state)
+    elif command == "set_cases":
+        _cmd_set_cases(state)
+    elif command == "set_timeout":
+        _cmd_set_timeout(args, state)
+    elif command == "run":
+        _cmd_run(state, tools)
+    elif command == "ask":
+        _cmd_ask(args, state)
+    elif command == "summary":
+        _cmd_summary(args, state, tools)
+    else:
+        print(f"未知命令：/{command}。可用 /help 查看帮助。")
+
+
+def _cmd_paste_problem(state: OJCoachState, tools: Any) -> None:
+    text = _read_multiline("请粘贴题目文本，单独输入 END 结束：")
+    result = _invoke_oj_tool(tools, "read_problem", {"problem_text": text})
+    if _looks_like_error(result):
+        print(result)
+        return
+
+    state.problem_text = result
+    state.analysis_result = ""
+    print(f"已读取题目文本，共 {len(state.problem_text)} 个字符。")
+
+
+def _cmd_load_problem(args: str, state: OJCoachState, tools: Any) -> None:
+    path = _require_single_arg(args, "用法：/load_problem path/to/problem.md")
+    if not path:
+        return
+
+    result = _invoke_oj_tool(tools, "read_problem_file", {"file_path": path})
+    if _looks_like_error(result):
+        print(result)
+        return
+
+    state.problem_text = result
+    state.analysis_result = ""
+    print(f"已读取题目文件，共 {len(state.problem_text)} 个字符。")
+
+
+def _cmd_analyze(state: OJCoachState, tools: Any) -> None:
+    if not state.problem_text.strip():
+        print("请先使用 /paste_problem 或 /load_problem 读取题目。")
+        return
+
+    result = _invoke_oj_tool(tools, "analyze_problem", {"problem_text": state.problem_text})
+    if _looks_like_error(result):
+        print(result)
+        return
+
+    state.analysis_result = result
+    print("\n题目分析：")
+    print(result)
+
+
+def _cmd_paste_code(args: str, state: OJCoachState, tools: Any) -> None:
+    language = args.strip()
+    if not language:
+        print("用法：/paste_code python|cpp|java")
+        return
+
+    code_text = _read_multiline("请粘贴完整 OJ 代码，单独输入 END 结束：")
+    raw_result = _invoke_oj_tool(
+        tools,
+        "read_code",
+        {"code_text": code_text, "language": language},
+    )
+    _apply_code_payload(raw_result, state)
+
+
+def _cmd_load_code(args: str, state: OJCoachState, tools: Any) -> None:
+    path = _require_single_arg(args, "用法：/load_code path/to/main.py")
+    if not path:
+        return
+
+    raw_result = _invoke_oj_tool(tools, "read_code_file", {"file_path": path})
+    _apply_code_payload(raw_result, state)
+
+
+def _cmd_set_stdin(state: OJCoachState) -> None:
+    state.stdin = _read_multiline("请粘贴测试输入 stdin，单独输入 END 结束：")
+    print(f"已设置 stdin，共 {len(state.stdin)} 个字符。")
+
+
+def _cmd_set_expected(state: OJCoachState) -> None:
+    state.expected_output = _read_multiline("请粘贴期望输出，单独输入 END 结束：")
+    print(f"已设置 expected_output，共 {len(state.expected_output)} 个字符。")
+
+
+def _cmd_set_cases(state: OJCoachState) -> None:
+    state.test_cases = _read_multiline(
+        "请粘贴额外测试用例，支持 JSON 或“输入:/输出:”文本格式，单独输入 END 结束："
+    )
+    print(f"已设置额外测试用例文本，共 {len(state.test_cases)} 个字符。")
+
+
+def _cmd_set_timeout(args: str, state: OJCoachState) -> None:
+    value = args.strip()
+    if not value:
+        print(f"当前超时时间：{state.timeout_ms}ms。用法：/set_timeout 3000")
+        return
+
+    try:
+        timeout_ms = int(value)
+    except ValueError:
+        print("错误：timeout_ms 必须是整数。")
+        return
+
+    if timeout_ms <= 0:
+        print("错误：timeout_ms 必须大于 0。")
+        return
+
+    state.timeout_ms = timeout_ms
+    print(f"已设置超时时间：{state.timeout_ms}ms。")
+
+
+def _cmd_run(state: OJCoachState, tools: Any) -> None:
+    if not state.code.strip():
+        print("请先使用 /paste_code 或 /load_code 读取完整 OJ 代码。")
+        return
+    if not state.language.strip() or state.language == "未知":
+        print("请先提供代码语言，例如 /paste_code python 或 /load_code main.cpp。")
+        return
+
+    print("正在运行当前代码...")
+    result = _invoke_oj_tool(
+        tools,
+        "run_oj_code",
+        {
+            "language": state.language,
+            "code": state.code,
+            "stdin": state.stdin,
+            "expected_output": state.expected_output,
+            "timeout_ms": state.timeout_ms,
+            "problem_text": state.problem_text,
+            "test_cases": state.test_cases,
+        },
+    )
+    state.last_run_result = result
+    _print_run_result(result)
+
+
+def _cmd_ask(args: str, state: OJCoachState) -> None:
+    question = args.strip()
+    if not question:
+        print("用法：/ask 为什么这个用例过不了？")
+        return
+
+    llm = _try_create_llm()
+    if llm is None:
+        print("当前未能初始化 LLM。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。")
+        print("你仍然可以使用 /run 查看真实运行结果，或使用 /summary 生成规则版复盘。")
+        return
+
+    messages = [
+        {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
+        {"role": "user", "content": _build_question_context(question, state)},
+    ]
+
+    print("\n回答：")
+    for chunk in llm.chat_stream(messages):
+        print(chunk, end="", flush=True)
+    print()
+
+
+def _cmd_summary(args: str, state: OJCoachState, tools: Any) -> None:
+    if not state.problem_text.strip():
+        print("请先使用 /paste_problem 或 /load_problem 读取题目。")
+        return
+    if not state.code.strip():
+        print("请先使用 /paste_code 或 /load_code 读取代码。")
+        return
+    if not state.last_run_result.strip():
+        print("请先使用 /run 运行一次代码，再做复盘。")
+        return
+
+    notes = args.strip()
+    result = _invoke_oj_tool(
+        tools,
+        "summarize_practice",
+        {
+            "problem_text": state.problem_text,
+            "code": state.code,
+            "run_result": state.last_run_result,
+            "notes": notes,
+        },
+    )
+    print("\n复盘总结：")
+    print(result)
+
+
+def _invoke_oj_tool(tools: Any, name: str, args: dict[str, Any]) -> str:
+    return tools.invoke(name, args)
+
+
+def _apply_code_payload(raw_result: str, state: OJCoachState) -> None:
+    if _looks_like_error(raw_result):
+        print(raw_result)
+        return
+
+    try:
+        payload = json.loads(raw_result)
+    except json.JSONDecodeError:
+        print(f"错误：读取代码结果不是 JSON：{raw_result}")
+        return
+
+    code = str(payload.get("code", ""))
+    language = str(payload.get("language", ""))
+    if not code.strip():
+        print("错误：读取到的代码为空。")
+        return
+
+    state.code = code
+    state.language = language
+    state.last_run_result = ""
+    print(f"已读取 {language} 代码，共 {len(state.code)} 个字符。")
+
+
+def _print_run_result(raw_result: str) -> None:
+    try:
+        result = json.loads(raw_result)
+    except json.JSONDecodeError:
+        print(raw_result)
+        return
+
+    status = result.get("status", "unknown")
+    print("\n运行结果：")
+    print(f"- status: {status}")
+    print(f"- time_ms: {result.get('time_ms', 0)}")
+
+    if "case_count" in result:
+        print(
+            f"- cases: {result.get('passed_count', 0)}/"
+            f"{result.get('case_count', 0)} passed"
+        )
+
+    explanation = _local_status_explanation(result)
+    if explanation:
+        print(f"- 说明: {explanation}")
+
+    for key, label in (
+        ("compile_output", "编译输出"),
+        ("stderr", "标准错误"),
+        ("stdout", "标准输出"),
+        ("diff_info", "差异信息"),
+    ):
+        value = str(result.get(key) or "").strip()
+        if value:
+            print(f"\n{label}：")
+            print(value)
+
+    if result.get("test_cases"):
+        print("\n测试用例明细：")
+        for index, item in enumerate(result["test_cases"], start=1):
+            print(
+                f"{index}. {item.get('name', '')} "
+                f"[{item.get('source', '')}] -> {item.get('status', '')}"
+            )
+
+
+def _local_status_explanation(result: dict[str, Any]) -> str:
+    status = result.get("status", "")
+    if status == "accepted":
+        return "输出与期望输出一致。"
+    if status == "wrong_answer":
+        return "程序正常结束，但实际输出与期望输出不一致。"
+    if status == "compile_error":
+        return "代码没有通过编译或语言环境不可用。"
+    if status == "runtime_error":
+        return "程序运行时异常退出，请优先查看 stderr 和退出码。"
+    if status == "time_limit_exceeded":
+        return "程序超过超时限制，可能是死循环或复杂度过高。"
+    if status == "no_expected_output":
+        return "程序已运行，但没有可对比的期望输出。"
+    return ""
+
+
+def _build_question_context(question: str, state: OJCoachState) -> str:
+    return f"""\
+用户问题：
+{question}
+
+当前题目：
+{_clip(state.problem_text)}
+
+题目分析：
+{_clip(state.analysis_result)}
+
+当前语言：
+{state.language or "未设置"}
+
+当前代码：
+{_clip(state.code)}
+
+当前 stdin：
+{_clip(state.stdin)}
+
+当前 expected_output：
+{_clip(state.expected_output)}
+
+额外测试用例：
+{_clip(state.test_cases)}
+
+最近一次 run_oj_code 结果：
+{_clip(state.last_run_result)}
+"""
+
+
+def _print_status(state: OJCoachState) -> None:
+    print("当前状态：")
+    print(f"- problem_text: {_yes_no(state.problem_text)} ({len(state.problem_text)} chars)")
+    print(f"- analysis_result: {_yes_no(state.analysis_result)}")
+    print(f"- language: {state.language or '未设置'}")
+    print(f"- code: {_yes_no(state.code)} ({len(state.code)} chars)")
+    print(f"- stdin: {_yes_no(state.stdin)} ({len(state.stdin)} chars)")
+    print(f"- expected_output: {_yes_no(state.expected_output)} ({len(state.expected_output)} chars)")
+    print(f"- test_cases: {_yes_no(state.test_cases)} ({len(state.test_cases)} chars)")
+    print(f"- last_run_result: {_yes_no(state.last_run_result)}")
+    print(f"- timeout_ms: {state.timeout_ms}")
+
+
+def _print_help() -> None:
+    print(
+        """
+可用命令：
+  /paste_problem              粘贴题目文本，直到 END
+  /load_problem <path>        从 .txt / .md / .docx 读取题目
+  /analyze                    分析当前题目
+  /paste_code <language>      粘贴完整 OJ 代码，language 为 python/cpp/java
+  /load_code <path>           从 .py / .cpp / .java 读取代码并识别语言
+  /set_stdin                  粘贴测试输入，直到 END
+  /set_expected               粘贴期望输出，直到 END
+  /set_cases                  粘贴额外测试用例，直到 END
+  /set_timeout <ms>           设置运行超时时间
+  /run                        运行当前代码
+  /ask <question>             基于当前上下文追问，需要 LLM 环境变量
+  /summary [notes]            生成规则版复盘总结
+  /status                     查看当前状态
+  /exit                       退出
+
+多行粘贴时，单独输入 END 结束。
+""".strip()
+    )
+
+
+def _read_multiline(prompt: str) -> str:
+    print(prompt)
+    lines: list[str] = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line.strip() == END_MARKER:
+            break
+        lines.append(line)
+    return "\n".join(lines).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _parse_command(raw: str) -> tuple[str, str]:
+    without_slash = raw[1:]
+    if not without_slash:
+        return "", ""
+    command, _, args = without_slash.partition(" ")
+    return command.strip().lower(), args.strip()
+
+
+def _require_single_arg(args: str, usage: str) -> str:
+    parts = _split_args(args)
+    if len(parts) != 1:
+        print(usage)
+        return ""
+    return parts[0]
+
+
+def _split_args(args: str) -> list[str]:
+    if not args.strip():
+        return []
+
+    lexer = shlex.shlex(args, posix=False)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return [_strip_quotes(part) for part in lexer]
+
+
+def _strip_quotes(value: str) -> str:
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+        return stripped[1:-1]
+    return stripped
+
+
+def _looks_like_error(result: str) -> bool:
+    stripped = result.lstrip()
+    return stripped.startswith(("错误", "执行错误", "未知工具", "error", "Error", "ERROR"))
+
+
+def _try_create_llm():
+    try:
+        from llm import LLMClient
+
+        return LLMClient()
+    except Exception:
+        return None
+
+
+def _clip(text: str, limit: int = MAX_CONTEXT_CHARS) -> str:
+    if len(text) <= limit:
+        return text or "（空）"
+    return text[:limit] + f"\n...（内容过长，已截断到 {limit} 字符）"
+
+
+def _yes_no(value: str) -> str:
+    return "已设置" if value.strip() else "未设置"
+
+
+def _configure_utf8_output() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name)
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+if __name__ == "__main__":
+    main()
