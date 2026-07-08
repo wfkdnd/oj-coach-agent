@@ -19,11 +19,7 @@ def bash(command: str, workdir: str = ".", timeout: int = 30, max_output: int = 
         timeout: 超时秒数
         max_output: 最大输出字符数
     """
-    # TODO: 参考 exercises/05 的 ex_5_3.py
-    #   1. 危险命令拦截
-    #   2. subprocess.run 执行
-    #   3. 超时处理
-    #   4. 输出截断
+  
     if any(re.search(pattern, command) for pattern in DANGER_PATTERNS):
         return f"❌ 危险命令被拦截:{command}"
     

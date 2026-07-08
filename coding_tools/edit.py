@@ -11,12 +11,7 @@ def edit_file(file_path: str, old_content: str, new_content: str) -> str:
         old_content: 要被替换的原文（必须唯一）
         new_content: 替换后的新内容
     """
-    # TODO:
-    #   1. 读取文件
-    #   2. 检查 old_content 出现次数：0次→报错，>1次→报错
-    #   3. 精确替换
-    #   4. 写回文件
-    #   5. 返回成功信息
+ 
     if not os.path.exists(file_path):
         return f"❌ 文件不存在: {file_path}"
     if os.path.isdir(file_path):

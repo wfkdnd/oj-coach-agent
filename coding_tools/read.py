@@ -11,7 +11,7 @@ def read_file(file_path: str, offset: int = 1, limit: int | None = None) -> str:
         offset: 起始行号（1-based）
         limit: 最多读几行
     """
-    # TODO: 参考 exercises/05 的 ex_5_1.py
+
     if not os.path.exists(file_path):
         return f"❌ 文件不存在: {file_path}"
     if not os.path.isfile(file_path):
