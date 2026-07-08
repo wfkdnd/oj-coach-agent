@@ -179,8 +179,10 @@ def _extract_samples(text: str) -> list[dict[str, str]]:
             if inline:
                 current[current_key] = inline
             continue
-        if current_key and _is_known_section_heading(heading):
+        if current_key and (_is_known_section_heading(heading) or _is_sample_explanation_heading(heading)):
             current_key = ""
+            continue
+        if current_key and _is_markdown_code_fence(line):
             continue
         if current_key and current:
             current[current_key] = _append_line(current[current_key], line)
@@ -188,7 +190,16 @@ def _extract_samples(text: str) -> list[dict[str, str]]:
     if current:
         samples.append(current)
 
-    return [sample for sample in samples if sample.get("输入") or sample.get("输出")]
+    cleaned_samples = []
+    for sample in samples:
+        cleaned = {
+            "输入": _clean_sample_text(sample.get("输入", "")),
+            "输出": _clean_sample_text(sample.get("输出", "")),
+        }
+        if cleaned["输入"] or cleaned["输出"]:
+            cleaned_samples.append(cleaned)
+
+    return cleaned_samples
 
 
 def _is_sample_input_heading(heading: str) -> bool:
@@ -199,11 +210,45 @@ def _is_sample_output_heading(heading: str) -> bool:
     return any(marker in heading for marker in ("样例输出", "输出样例", "示例输出", "sample output", "example output", "output example"))
 
 
+def _is_sample_explanation_heading(heading: str) -> bool:
+    return any(
+        marker in heading
+        for marker in (
+            "样例解释",
+            "样例说明",
+            "示例解释",
+            "示例说明",
+            "sample explanation",
+            "example explanation",
+            "explanation",
+        )
+    )
+
+
+def _is_markdown_code_fence(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
+
+
 def _is_known_section_heading(heading: str) -> bool:
     for aliases in SECTION_ALIASES.values():
         if any(heading == _normalize_heading(alias) for alias in aliases):
             return True
     return False
+
+
+def _clean_sample_text(text: str) -> str:
+    lines = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if _is_markdown_code_fence(line):
+            continue
+        lines.append(line.rstrip())
+
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
 
 
 def _extract_inline_after_colon(line: str) -> str:
