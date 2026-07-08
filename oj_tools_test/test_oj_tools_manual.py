@@ -38,7 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from oj_tools import read_code_file, read_problem_file, run_oj_code
+from oj_tools import analyze_problem, read_code_file, read_problem_file, run_oj_code
 
 
 VALID_RUN_STATUSES = {
@@ -96,18 +96,44 @@ def _looks_like_error(result: str) -> bool:
     return stripped.startswith(TOOL_ERROR_PREFIXES)
 
 
-def _load_code_payload(raw_result: str) -> dict[str, Any]:
+def _parse_json_object(tool_name: str, raw_result: str) -> dict[str, Any]:
     try:
         payload = json.loads(raw_result)
     except json.JSONDecodeError as exc:
-        raise AssertionError(f"read_code_file 没有返回 JSON：{raw_result}") from exc
+        raise AssertionError(f"{tool_name} 没有返回 JSON：{raw_result}") from exc
 
-    assert isinstance(payload, dict), f"read_code_file 返回的 JSON 不是对象：{payload!r}"
+    assert isinstance(payload, dict), f"{tool_name} 返回的 JSON 不是对象：{payload!r}"
+    return payload
+
+
+def _load_code_payload(raw_result: str) -> dict[str, Any]:
+    payload = _parse_json_object("read_code_file", raw_result)
     assert payload.get("code", "").strip(), "read_code_file 返回了空代码"
     assert payload.get("language") in {"python", "cpp", "java"}, (
         f"识别到不支持的语言：{payload.get('language')!r}"
     )
     return payload
+
+
+def _has_manual_run_input() -> bool:
+    return any(
+        _env(name)
+        for name in (
+            "OJ_STDIN",
+            "OJ_STDIN_FILE",
+            "OJ_EXPECTED_OUTPUT",
+            "OJ_EXPECTED_OUTPUT_FILE",
+            "OJ_TEST_CASES",
+            "OJ_TEST_CASES_FILE",
+        )
+    )
+
+
+def _should_use_problem_sample() -> bool:
+    flag = _env("OJ_USE_PROBLEM_SAMPLE").strip().lower()
+    if flag:
+        return flag not in {"0", "false", "no", "off", "否"}
+    return not _has_manual_run_input()
 
 
 def check_read_problem_file() -> str:
@@ -123,6 +149,26 @@ def check_read_problem_file() -> str:
     return result
 
 
+def check_analyze_problem(problem_text: str | None = None) -> dict[str, Any]:
+    if problem_text is None:
+        problem_text = check_read_problem_file()
+
+    raw_result = analyze_problem(problem_text)
+    _print_section("analyze_problem 返回结果", raw_result)
+
+    assert raw_result.strip(), "analyze_problem 返回了空结果"
+    assert not _looks_like_error(raw_result), raw_result
+
+    payload = _parse_json_object("analyze_problem", raw_result)
+    test_cases = payload.get("测试用例", [])
+    if test_cases:
+        _print_section("从题目分析得到的测试用例", json.dumps(test_cases, ensure_ascii=False, indent=2))
+    else:
+        _print_section("从题目分析得到的测试用例", "未提取到测试用例")
+
+    return payload
+
+
 def check_read_code_file() -> dict[str, Any]:
     code_file = _env("OJ_CODE_FILE")
     if not code_file:
@@ -135,12 +181,21 @@ def check_read_code_file() -> dict[str, Any]:
     return _load_code_payload(raw_result)
 
 
-def check_run_oj_code() -> dict[str, Any]:
+def check_run_oj_code(problem_text: str = "") -> dict[str, Any]:
     code_payload = check_read_code_file()
     language = _env("OJ_LANGUAGE") or str(code_payload["language"])
     stdin = _read_env_text("OJ_STDIN", "OJ_STDIN_FILE")
     expected_output = _read_env_text("OJ_EXPECTED_OUTPUT", "OJ_EXPECTED_OUTPUT_FILE")
+    test_cases = _read_env_text("OJ_TEST_CASES", "OJ_TEST_CASES_FILE")
     timeout_ms = int(_env("OJ_TIMEOUT_MS", "3000"))
+    selected_problem_text = problem_text if _should_use_problem_sample() else ""
+
+    if selected_problem_text:
+        _print_section("run_oj_code 测试用例来源", "已传入 problem_text，工具会优先从题目中提取样例。")
+    elif test_cases:
+        _print_section("run_oj_code 测试用例来源", "使用 OJ_TEST_CASES 或 OJ_TEST_CASES_FILE 提供的手动测试用例。")
+    else:
+        _print_section("run_oj_code 测试用例来源", "使用 OJ_STDIN/OJ_EXPECTED_OUTPUT 或对应文件提供的手动输入。")
 
     raw_result = run_oj_code(
         language=language,
@@ -148,6 +203,8 @@ def check_run_oj_code() -> dict[str, Any]:
         stdin=stdin,
         expected_output=expected_output,
         timeout_ms=timeout_ms,
+        problem_text=selected_problem_text,
+        test_cases=test_cases,
     )
     _print_section("run_oj_code 返回结果", raw_result)
 
@@ -173,6 +230,10 @@ def test_read_problem_file_manual() -> None:
     check_read_problem_file()
 
 
+def test_analyze_problem_manual() -> None:
+    check_analyze_problem()
+
+
 def test_read_code_file_manual() -> None:
     check_read_code_file()
 
@@ -182,8 +243,9 @@ def test_run_oj_code_manual() -> None:
 
 
 def main() -> int:
-    check_read_problem_file()
-    check_run_oj_code()
+    problem_text = check_read_problem_file()
+    check_analyze_problem(problem_text)
+    check_run_oj_code(problem_text)
     return 0
 
 
