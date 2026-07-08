@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from oj_tools.analyze_problem import extract_problem_test_cases
+from oj_tools.compare_output import compare_output
 
 
 DEFAULT_TIMEOUT_MS = 3000
@@ -92,9 +93,11 @@ def run_oj_code(
                     compile_output=runner["compile_output"],
                 )
                 single_result["time_ms"] = _elapsed_ms(case_started_at)
-                single_result["status"] = _decide_status(single_result, case["expected_output"])
-                single_result["normalized_stdout"] = _normalize_output(single_result["stdout"])
-                single_result["normalized_expected_output"] = _normalize_output(case["expected_output"])
+                comparison = _compare_and_decide(single_result, case["expected_output"])
+                single_result["status"] = comparison["status"]
+                single_result["normalized_stdout"] = comparison["normalized_stdout"]
+                single_result["normalized_expected_output"] = comparison["normalized_expected_output"]
+                single_result["diff_info"] = comparison["diff_info"]
                 case_results.append(_build_case_result(case, single_result))
     except Exception as exc:
         return _to_json(
@@ -284,20 +287,47 @@ def _build_result(
     }
 
 
-def _decide_status(result: dict, expected_output: str) -> str:
+def _compare_and_decide(result: dict, expected_output: str) -> dict:
+    """使用 compare_output 模块进行标准化对比，返回状态、标准化文本和差异描述。"""
+    # 进程级别的状态优先于输出对比
     if result["status"] in {"compile_error", "time_limit_exceeded"}:
-        return result["status"]
-    if result["timed_out"]:
-        return "time_limit_exceeded"
-    if result["missing_command"]:
-        return result["status"]
-    if result["exit_code"] not in (0, None):
-        return "runtime_error"
-    if expected_output == "":
-        return "no_expected_output"
-    if _normalize_output(result["stdout"]) == _normalize_output(expected_output):
-        return "accepted"
-    return "wrong_answer"
+        return {
+            "status": result["status"],
+            "normalized_stdout": _normalize_output(result["stdout"]),
+            "normalized_expected_output": _normalize_output(expected_output),
+            "diff_info": "",
+        }
+    if result.get("timed_out"):
+        return {
+            "status": "time_limit_exceeded",
+            "normalized_stdout": _normalize_output(result["stdout"]),
+            "normalized_expected_output": _normalize_output(expected_output),
+            "diff_info": "",
+        }
+    if result.get("missing_command"):
+        return {
+            "status": result["status"],
+            "normalized_stdout": _normalize_output(result["stdout"]),
+            "normalized_expected_output": _normalize_output(expected_output),
+            "diff_info": "",
+        }
+    if result.get("exit_code") not in (0, None):
+        return {
+            "status": "runtime_error",
+            "normalized_stdout": _normalize_output(result["stdout"]),
+            "normalized_expected_output": _normalize_output(expected_output),
+            "diff_info": "",
+        }
+
+    # 委托给 compare_output 做输出层的精确对比
+    cmp_json = compare_output(stdout=result["stdout"], expected_output=expected_output, mode="trailing")
+    cmp_result = json.loads(cmp_json)
+    return {
+        "status": cmp_result["status"],
+        "normalized_stdout": cmp_result.get("normalized_stdout", ""),
+        "normalized_expected_output": cmp_result.get("normalized_expected", ""),
+        "diff_info": cmp_result.get("diff_info", ""),
+    }
 
 
 def _collect_test_cases(problem_text: str, test_cases: str, stdin: str, expected_output: str) -> list[dict[str, str]]:
@@ -439,6 +469,7 @@ def _build_case_result(case: dict[str, str], result: dict) -> dict:
         "time_ms": result["time_ms"],
         "normalized_stdout": result["normalized_stdout"],
         "normalized_expected_output": result["normalized_expected_output"],
+        "diff_info": result.get("diff_info", ""),
     }
 
 
@@ -453,6 +484,7 @@ def _build_batch_result(case_results: list[dict], time_ms: int) -> dict:
         "time_ms": time_ms,
         "normalized_stdout": representative.get("normalized_stdout", ""),
         "normalized_expected_output": representative.get("normalized_expected_output", ""),
+        "diff_info": representative.get("diff_info", ""),
         "case_count": len(case_results),
         "passed_count": sum(1 for item in case_results if item["status"] == "accepted"),
         "failed_count": sum(1 for item in case_results if item["status"] not in {"accepted", "no_expected_output"}),
@@ -546,7 +578,7 @@ def _to_json(result: dict) -> str:
         "normalized_stdout": result["normalized_stdout"],
         "normalized_expected_output": result["normalized_expected_output"],
     }
-    for key in ("case_count", "passed_count", "failed_count", "test_cases"):
+    for key in ("case_count", "passed_count", "failed_count", "test_cases", "diff_info"):
         if key in result:
             public_result[key] = result[key]
     return json.dumps(public_result, ensure_ascii=False, indent=2)
