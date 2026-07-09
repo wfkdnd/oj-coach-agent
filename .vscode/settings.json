@@ -1,0 +1,36 @@
+{
+    // ───────────────── Python 解释器 ─────────────────
+    // 整个仓库使用一个根 .venv（uv workspace），所有章节共享同一个 Python 环境。
+    // 三层兜底，确保云端每次进入工作区都自动选中 /workspace/.venv：
+    //
+    // 1) defaultInterpreterPath：Python 扩展的默认解释器路径（仅在工作区还未记住选择时生效）
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    //
+    // 2) venvPath：告诉 Python 扩展去哪里发现虚拟环境（兜底）
+    "python.venvPath": "${workspaceFolder}",
+    //
+    // 3) venvFolders：附加的 venv 名称，加快自动发现
+    "python.venvFolders": [".venv"],
+  
+    // ───────────────── 代码解析（Pylance）─────────────────
+    // 让 Pylance 把每个章节目录都视为源码根，这样章节内的同级导入
+    // （如 ch01 的 `from agent import ...`、ch02 的 `from config import ...`）能被解析。
+    "python.analysis.extraPaths": [
+      "ch01-hello-agent",
+      "ch02-hello-llm"
+    ],
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.diagnosticMode": "workspace",
+    // 让 Pylance 显式使用根 .venv 作为类型推断的环境
+    "python.analysis.typeCheckingMode": "basic",
+  
+    // ───────────────── 终端 ─────────────────
+    // 终端打开时自动激活根 .venv
+    "python.terminal.activateEnvironment": true,
+    // 终端启动时把根 .venv/bin 放进 PATH，无需 source 即可直接使用 python / pip
+    "terminal.integrated.env.linux": {
+      "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+      "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+    }
+  }
+  

@@ -1,0 +1,23 @@
+# ---- 作业验证流水线（从 CI 仓库引入） ----
+include:
+  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter1.yml
+  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter2.yml
+  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter3.yml
+  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter5.yml
+  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter6.yml
+
+$:
+  vscode:
+    - runner:
+        cpus: 16
+      docker:
+        image: docker.cnb.cool/looc/default-dev-env:latest
+      env:
+        VIRTUAL_ENV_DISABLE_PROMPT: "1"
+      services:
+        - vscode
+        - docker
+      stages:
+        - name: uv sync
+          script: |
+            cd /workspace && uv sync --all-packages
