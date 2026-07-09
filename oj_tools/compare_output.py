@@ -13,7 +13,7 @@ import json
 import re
 
 
-COMPARE_MODES = {"strict", "trailing", "relaxed"}
+COMPARE_MODES = {"strict", "trailing", "relaxed", "full_trim"}
 
 
 def compare_output(
@@ -27,6 +27,7 @@ def compare_output(
       - "strict"：完全逐字符对比。
       - "trailing"（默认）：忽略每行末尾空白和末尾空行。
       - "relaxed"：合并连续空白后再对比。
+      - "full_trim"：去掉每行首尾空白和首尾空行后再对比。
     """
     if mode not in COMPARE_MODES:
         return json.dumps(
@@ -89,6 +90,8 @@ def _normalize(text: str, mode: str) -> str:
         text = _strip_trailing(text)
     elif mode == "relaxed":
         text = _collapse_whitespace(text)
+    elif mode == "full_trim":
+        text = _full_trim(text)
     return text
 
 
@@ -105,9 +108,19 @@ def _strip_trailing(text: str) -> str:
 def _collapse_whitespace(text: str) -> str:
     """将连续空白合并为单个空格。"""
     return "\n".join(
-        re.sub(r"[ \t]+", " ", line.rstrip()).strip().rstrip()
+        re.sub(r"[ \t]+", " ", line.rstrip()).strip()
         for line in text.splitlines()
     )
+
+
+def _full_trim(text: str) -> str:
+    """去掉每行首尾空白，并去掉首尾空行。"""
+    lines = [line.strip() for line in text.splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
 
 
 def _describe_diff(stdout: str, expected: str) -> str:

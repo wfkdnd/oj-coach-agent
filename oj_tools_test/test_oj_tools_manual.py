@@ -5,8 +5,9 @@
     python oj_tools_test/test_oj_tools_manual.py
     pytest oj_tools_test -s
 
-脚本会打印 read_problem_file、read_code_file 和 run_oj_code 的原始结果，
-方便你在自己提供测试用例时直接看到工具行为。
+脚本会打印 read_problem_file、analyze_problem、read_code_file、run_oj_code、
+compare_output 和 summarize_practice 的原始结果，方便你在自己提供测试用例时
+直接看到工具行为。
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from oj_tools import analyze_problem, read_code_file, read_problem_file, run_oj_code
+from oj_tools import analyze_problem, compare_output, read_code_file, read_problem_file, run_oj_code, summarize_practice
 
 
 VALID_RUN_STATUSES = {
@@ -181,8 +182,9 @@ def check_read_code_file() -> dict[str, Any]:
     return _load_code_payload(raw_result)
 
 
-def check_run_oj_code(problem_text: str = "") -> dict[str, Any]:
-    code_payload = check_read_code_file()
+def check_run_oj_code(problem_text: str = "", code_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if code_payload is None:
+        code_payload = check_read_code_file()
     language = _env("OJ_LANGUAGE") or str(code_payload["language"])
     stdin = _read_env_text("OJ_STDIN", "OJ_STDIN_FILE")
     expected_output = _read_env_text("OJ_EXPECTED_OUTPUT", "OJ_EXPECTED_OUTPUT_FILE")
@@ -226,6 +228,60 @@ def check_run_oj_code(problem_text: str = "") -> dict[str, Any]:
     return result
 
 
+def check_compare_output() -> dict[str, Any]:
+    stdout = _read_env_text("OJ_STDOUT", "OJ_STDOUT_FILE")
+    expected_output = _read_env_text("OJ_EXPECTED_OUTPUT", "OJ_EXPECTED_OUTPUT_FILE")
+    mode = _env("OJ_COMPARE_MODE", "trailing")
+
+    if not stdout and not expected_output:
+        _skip_or_raise(
+            "请设置 OJ_STDOUT/OJ_STDOUT_FILE 和 OJ_EXPECTED_OUTPUT/OJ_EXPECTED_OUTPUT_FILE，"
+            "或 OJ_COMPARE_MODE 选择对比模式（默认 trailing）。"
+        )
+
+    raw_result = compare_output(stdout=stdout, expected_output=expected_output, mode=mode)
+    _print_section("compare_output 返回结果", raw_result)
+
+    payload = _parse_json_object("compare_output", raw_result)
+    assert payload.get("status") in {"accepted", "wrong_answer"}, (
+        f"对比状态不在预期范围内：{payload.get('status')!r}"
+    )
+
+    return payload
+
+
+def check_summarize_practice(
+    problem_text: str = "",
+    code: str = "",
+    run_result_json: str = "",
+) -> dict[str, Any]:
+    if not problem_text:
+        problem_text = check_read_problem_file()
+    if not code:
+        code_payload = check_read_code_file()
+        code = str(code_payload["code"])
+
+    run_result = run_result_json or _read_env_text("OJ_RUN_RESULT", "OJ_RUN_RESULT_FILE")
+    if not run_result:
+        _skip_or_raise(
+            "请设置 OJ_RUN_RESULT 为 run_oj_code 返回的 JSON 字符串，"
+            "或设置 OJ_RUN_RESULT_FILE 指向包含该 JSON 的文件。"
+        )
+
+    notes = _env("OJ_NOTES")
+
+    raw_result = summarize_practice(
+        problem_text=problem_text,
+        code=code,
+        run_result=run_result,
+        notes=notes,
+    )
+    _print_section("summarize_practice 返回结果", raw_result)
+
+    payload = _parse_json_object("summarize_practice", raw_result)
+    return payload
+
+
 def test_read_problem_file_manual() -> None:
     check_read_problem_file()
 
@@ -242,10 +298,26 @@ def test_run_oj_code_manual() -> None:
     check_run_oj_code()
 
 
+def test_compare_output_manual() -> None:
+    check_compare_output()
+
+
+def test_summarize_practice_manual() -> None:
+    check_summarize_practice()
+
+
 def main() -> int:
     problem_text = check_read_problem_file()
     check_analyze_problem(problem_text)
-    check_run_oj_code(problem_text)
+    code_payload = check_read_code_file()
+    code = str(code_payload["code"])
+    run_result = check_run_oj_code(problem_text, code_payload)
+    check_compare_output()
+    check_summarize_practice(
+        problem_text=problem_text,
+        code=code,
+        run_result_json=json.dumps(run_result, ensure_ascii=False),
+    )
     return 0
 
 
