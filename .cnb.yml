@@ -14,10 +14,14 @@ $:
         image: docker.cnb.cool/looc/default-dev-env:latest
       env:
         VIRTUAL_ENV_DISABLE_PROMPT: "1"
+        VIRTUAL_ENV: "/workspace/.venv"
+        PATH: "/workspace/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       services:
         - vscode
         - docker
       stages:
         - name: uv sync
           script: |
-            cd /workspace && uv sync --all-packages
+            cd /workspace
+            uv sync --all-packages
+            uv run python -c "import tiktoken"
