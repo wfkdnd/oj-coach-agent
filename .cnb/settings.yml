@@ -6,6 +6,6 @@ workspace:
       hoverImage: .cnb/acnb.png
     autoOpenWebIDE: true
 fork:
-    button:
-      description: Fork 一下，从此告别手搓 Agent✨🚀
-      hoverImage: .cnb/nezha.png
+  button:
+    description: Fork 一下，从此告别手搓 Agent✨🚀
+    hoverImage: .cnb/nezha.png

@@ -9,3 +9,22 @@ $:
       services:
         - vscode
         - docker
+      stages:
+        - name: prepare-python-env
+          script: |
+            set -e
+            if command -v uv >/dev/null 2>&1; then
+              uv sync --extra dev
+            else
+              if command -v python3 >/dev/null 2>&1; then
+                PYTHON=python3
+              else
+                PYTHON=python
+              fi
+              if [ ! -x .venv/bin/python ]; then
+                "$PYTHON" -m venv .venv
+              fi
+              . .venv/bin/activate
+              python -m pip install --upgrade pip
+              python -m pip install -r requirements.txt
+            fi

@@ -4,11 +4,24 @@
 
 ## 快速开始
 
+### CNB 云端
+
+在 CNB 工作区内运行时，平台会自动注入 `CNB_API_ENDPOINT` / `CNB_REPO_SLUG` / `CNB_TOKEN`，通常不需要手动创建 `.env`：
+
+```bash
+uv sync
+uv run agent-app                      # 交互式 REPL
+uv run agent-app --solo "你的任务"     # 单兵模式（跑完即退）
+echo "你的任务" | uv run agent-app --solo
+```
+
+### 本地 / 非 CNB 环境
+
 ```bash
 # 1. 安装依赖（推荐 uv，也可用 pip -e .）
 uv sync            # 或：pip install -e .
 
-# 2. 配置环境变量
+# 2. 配置环境变量（仅本地 / 非 CNB 环境需要）
 cp .env.example .env
 # 编辑 .env，填入 BASE_URL / API_KEY / MODEL_ID
 

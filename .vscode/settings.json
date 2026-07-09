@@ -1,6 +1,6 @@
 {
   // ───────────────── Python 解释器 ─────────────────
-  // 整个仓库使用一个根 .venv（uv workspace），所有章节共享同一个 Python 环境。
+  // 整个仓库使用一个根 .venv，云端进入工作区时由 .cnb.yml 自动准备依赖。
   // 三层兜底，确保云端每次进入工作区都自动选中 /workspace/.venv：
   //
   // 1) defaultInterpreterPath：Python 扩展的默认解释器路径（仅在工作区还未记住选择时生效）
@@ -13,11 +13,11 @@
   "python.venvFolders": [".venv"],
 
   // ───────────────── 代码解析（Pylance）─────────────────
-  // 让 Pylance 把每个章节目录都视为源码根，这样章节内的同级导入
-  // （如 ch01 的 `from agent import ...`、ch02 的 `from config import ...`）能被解析。
+  // 让 Pylance 识别当前项目里的顶层模块和工具目录，避免引用已不存在的旧章节目录。
   "python.analysis.extraPaths": [
-    "ch01-hello-agent",
-    "ch02-hello-llm"
+    ".",
+    "coding_tools",
+    "oj_tools"
   ],
   "python.analysis.autoSearchPaths": true,
   "python.analysis.diagnosticMode": "workspace",
