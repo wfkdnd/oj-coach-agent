@@ -303,8 +303,16 @@ def _cmd_summary(args: str, state: OJCoachState, tools: Any) -> None:
             "notes": notes,
         },
     )
-    print("\n复盘总结：")
+    print("\n规则版复盘总结：")
     print(result)
+
+    llm = _try_create_llm()
+    if llm is None:
+        print("\n当前未能初始化 LLM，仅展示规则版复盘。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。")
+        return
+
+    print("\n--- LLM 讲解版复盘 ---")
+    _llm_explain_summary(state, result, notes, llm)
 
 
 def _auto_analyze_problem(state: OJCoachState, tools: Any) -> bool:
@@ -549,6 +557,53 @@ def _llm_explain_run(state: OJCoachState, llm) -> None:
     print()
 
 
+def _build_summary_explanation_prompt(state: OJCoachState, summary_result: str, notes: str) -> str:
+    return f"""\
+请把下面的规则版复盘总结翻译成适合刷题者理解的自然语言讲解。
+
+要求：
+1. 先说明这题主要考察什么，以及应该抓住的关键观察。
+2. 再说明当前代码和运行状态，重点解释错误原因或通过原因。
+3. 如果有错误，只给定位思路和修改方向，不要直接给完整代码。
+4. 最后总结下次遇到类似题时的识别信号。
+5. 不要捏造运行结果；所有结论都必须来自下面的上下文。
+
+用户备注：
+{notes or "（无）"}
+
+规则版复盘总结：
+{_clip(summary_result)}
+
+最近一次真实运行结果：
+{_clip(state.last_run_result)}
+
+题目分析：
+{_clip(state.analysis_result)}
+
+当前题目：
+{_clip(state.problem_text)}
+
+当前语言：{state.language or "未设置"}
+
+当前代码：
+{_clip(state.code, limit=MAX_CONTEXT_CHARS * 2)}
+"""
+
+
+def _llm_explain_summary(state: OJCoachState, summary_result: str, notes: str, llm) -> None:
+    """使用 LLM 把规则版复盘总结解释成人话。"""
+    messages = [
+        {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
+        {"role": "user", "content": _build_summary_explanation_prompt(state, summary_result, notes)},
+    ]
+    try:
+        for chunk in llm.chat_stream(messages):
+            print(chunk, end="", flush=True)
+    except Exception as exc:
+        print(f"\n（LLM 复盘讲解生成失败：{exc}）")
+    print()
+
+
 def _print_status(state: OJCoachState) -> None:
     print("当前状态：")
     print(f"- problem_text: {_yes_no(state.problem_text)} ({len(state.problem_text)} chars)")
@@ -577,7 +632,7 @@ def _print_help() -> None:
   /set_timeout <ms>           设置运行超时时间
   /run                        运行当前代码
   /ask <question>             基于当前上下文追问，需要 LLM 环境变量
-  /summary [notes]            生成规则版复盘总结
+  /summary [notes]            生成规则版复盘总结，并交给 LLM 做人话讲解
   /status                     查看当前状态
   /exit                       退出
 
