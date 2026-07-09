@@ -251,6 +251,12 @@ def _cmd_run(state: OJCoachState, tools: Any) -> None:
     state.last_run_result = result
     _print_run_result(result)
 
+    # 自动 LLM 解释层
+    llm = _try_create_llm()
+    if llm is not None:
+        print("\n--- LLM 分析 ---")
+        _llm_explain_run(state, llm)
+
 
 def _cmd_ask(args: str, state: OJCoachState) -> None:
     question = args.strip()
@@ -488,6 +494,59 @@ def _build_question_context(question: str, state: OJCoachState) -> str:
 最近一次 run_oj_code 结果：
 {_clip(state.last_run_result)}
 """
+
+
+def _build_run_analysis_prompt(state: OJCoachState) -> str:
+    """构建用于 LLM 解释运行结果的上下文提示词。"""
+    try:
+        run_result = json.loads(state.last_run_result)
+    except json.JSONDecodeError:
+        run_result = {}
+    status = run_result.get("status", "unknown")
+
+    return f"""\
+请分析以下运行结果并给出调试建议：
+
+运行状态：{status}
+运行详情：
+{_clip(state.last_run_result)}
+
+当前题目：
+{_clip(state.problem_text)}
+
+题目分析：
+{_clip(state.analysis_result)}
+
+当前语言：{state.language}
+
+当前代码：
+{_clip(state.code, limit=MAX_CONTEXT_CHARS * 2)}
+
+当前输入（stdin）：
+{_clip(state.stdin)}
+
+期望输出：
+{_clip(state.expected_output)}
+
+请根据以上信息：
+1. 如果运行出错（compile_error / runtime_error / time_limit_exceeded / wrong_answer），请具体指出错误原因和修复方向
+2. 如果运行通过（accepted），可以给出代码优化建议或考察的知识点总结
+3. 不要直接给出完整代码，而是引导用户自己思考和修改
+"""
+
+
+def _llm_explain_run(state: OJCoachState, llm) -> None:
+    """使用 LLM 流式解读 /run 的运行结果。"""
+    messages = [
+        {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
+        {"role": "user", "content": _build_run_analysis_prompt(state)},
+    ]
+    try:
+        for chunk in llm.chat_stream(messages):
+            print(chunk, end="", flush=True)
+    except Exception as exc:
+        print(f"\n（LLM 解释生成失败：{exc}）")
+    print()
 
 
 def _print_status(state: OJCoachState) -> None:
