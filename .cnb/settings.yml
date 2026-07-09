@@ -1,0 +1,11 @@
+workspace:
+  launch:
+    button:
+      name: 动嘴造 Agent
+      description: 张嘴说需求，AI 替你写代码🗣️🤖
+      hoverImage: .cnb/acnb.png
+    autoOpenWebIDE: true
+fork:
+    button:
+      description: Fork 一下，从此告别手搓 Agent✨🚀
+      hoverImage: .cnb/nezha.png
