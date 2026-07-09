@@ -11,32 +11,69 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
-try:
-    from dotenv import load_dotenv
+_ENV_FILE = Path(__file__).resolve().with_name(".env")
+_DOTENV_VALUES = {}
 
-    load_dotenv()
+
+def _read_dotenv_file(path: Path) -> dict[str, str]:
+    """在未安装 python-dotenv 时，读取简单的 KEY=VALUE 格式。"""
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return values
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        # 兼容 BASE_URL="..." 这类常见写法；复杂转义仍交给 python-dotenv。
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+
+    return values
+
+try:
+    from dotenv import dotenv_values, load_dotenv
+
+    load_dotenv(_ENV_FILE)
+    _DOTENV_VALUES = dotenv_values(_ENV_FILE)
 except ImportError:
-    pass
+    _DOTENV_VALUES = _read_dotenv_file(_ENV_FILE)
 
 
 # ============================================================
 # 环境变量读取
 # ============================================================
 
+def _get_env(name: str, default: str = "") -> str:
+    """优先读系统环境变量；为空时回退到项目根目录 .env 文件。"""
+    return os.getenv(name) or _DOTENV_VALUES.get(name) or default
+
+
 def get_base_url() -> str:
     """获取 LLM API 的 Base URL。"""
     # 使用 or 兜底，是为了兼容 .env 中 BASE_URL= 这种空值写法。
-    endpoint = os.getenv("CNB_API_ENDPOINT", "")
-    repo_slug = os.getenv("CNB_REPO_SLUG", "")
+    endpoint = _get_env("CNB_API_ENDPOINT")
+    repo_slug = _get_env("CNB_REPO_SLUG")
     cnb_base_url = (
         f"{endpoint}/{repo_slug}/-/ai-ide/v2"
         if endpoint and repo_slug
         else ""
     )
 
-    base_url = os.getenv("BASE_URL") or cnb_base_url
+    base_url = _get_env("BASE_URL") or cnb_base_url
     if base_url:
         return base_url
 
@@ -47,7 +84,7 @@ def get_base_url() -> str:
 
 def get_api_key() -> str:
     """获取 API Key。优先读取 `API_KEY`，否则读取 `CNB_TOKEN`。"""
-    api_key = os.getenv("API_KEY") or os.getenv("CNB_TOKEN", "")
+    api_key = _get_env("API_KEY") or _get_env("CNB_TOKEN")
     if not api_key:
         raise EnvironmentError("请设置 API_KEY 或 CNB_TOKEN 环境变量")
     return api_key
@@ -55,7 +92,7 @@ def get_api_key() -> str:
 
 def get_model_id() -> str:
     """获取模型 ID，默认 `glm-5.0`。"""
-    return os.getenv("MODEL_ID") or "glm-5.0"
+    return _get_env("MODEL_ID", "glm-5.0")
 
 
 def make_client():
@@ -65,7 +102,7 @@ def make_client():
     return OpenAI(
         base_url=get_base_url(),
         api_key=get_api_key(),
-        timeout=int(os.environ.get("LLM_TIMEOUT", "60")),
+        timeout=int(_get_env("LLM_TIMEOUT", "60")),
     )
 
 
