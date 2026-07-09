@@ -56,6 +56,7 @@ def main() -> None:
     print("OJ Coach Agent")
     print("=" * 50)
     print("输入 /help 查看命令，输入 /exit 退出。")
+    print("读取题目后会自动分析；题目样例和代码都就绪时会自动运行。")
     print("安全提示：/run 会执行当前代码，请只运行可信代码。")
 
     while True:
@@ -125,6 +126,8 @@ def _cmd_paste_problem(state: OJCoachState, tools: Any) -> None:
     state.problem_text = result
     state.analysis_result = ""
     print(f"已读取题目文本，共 {len(state.problem_text)} 个字符。")
+    _auto_analyze_problem(state, tools)
+    _maybe_auto_run_problem_samples(state, tools, "题目已更新")
 
 
 def _cmd_load_problem(args: str, state: OJCoachState, tools: Any) -> None:
@@ -140,6 +143,8 @@ def _cmd_load_problem(args: str, state: OJCoachState, tools: Any) -> None:
     state.problem_text = result
     state.analysis_result = ""
     print(f"已读取题目文件，共 {len(state.problem_text)} 个字符。")
+    _auto_analyze_problem(state, tools)
+    _maybe_auto_run_problem_samples(state, tools, "题目已更新")
 
 
 def _cmd_analyze(state: OJCoachState, tools: Any) -> None:
@@ -155,6 +160,7 @@ def _cmd_analyze(state: OJCoachState, tools: Any) -> None:
     state.analysis_result = result
     print("\n题目分析：")
     print(result)
+    _maybe_auto_run_problem_samples(state, tools, "题目分析已更新")
 
 
 def _cmd_paste_code(args: str, state: OJCoachState, tools: Any) -> None:
@@ -169,7 +175,8 @@ def _cmd_paste_code(args: str, state: OJCoachState, tools: Any) -> None:
         "read_code",
         {"code_text": code_text, "language": language},
     )
-    _apply_code_payload(raw_result, state)
+    if _apply_code_payload(raw_result, state):
+        _maybe_auto_run_problem_samples(state, tools, "代码已更新")
 
 
 def _cmd_load_code(args: str, state: OJCoachState, tools: Any) -> None:
@@ -178,7 +185,8 @@ def _cmd_load_code(args: str, state: OJCoachState, tools: Any) -> None:
         return
 
     raw_result = _invoke_oj_tool(tools, "read_code_file", {"file_path": path})
-    _apply_code_payload(raw_result, state)
+    if _apply_code_payload(raw_result, state):
+        _maybe_auto_run_problem_samples(state, tools, "代码已更新")
 
 
 def _cmd_set_stdin(state: OJCoachState) -> None:
@@ -293,31 +301,103 @@ def _cmd_summary(args: str, state: OJCoachState, tools: Any) -> None:
     print(result)
 
 
+def _auto_analyze_problem(state: OJCoachState, tools: Any) -> bool:
+    if not state.problem_text.strip():
+        return False
+
+    print("正在自动分析题目...")
+    result = _invoke_oj_tool(tools, "analyze_problem", {"problem_text": state.problem_text})
+    if _looks_like_error(result):
+        print(result)
+        return False
+
+    state.analysis_result = result
+    sample_count = _count_runnable_problem_cases(result)
+    if sample_count:
+        print(f"自动分析完成，提取到 {sample_count} 组可运行题目样例。")
+    else:
+        print("自动分析完成，但没有提取到可直接运行的题目样例。")
+    return True
+
+
+def _maybe_auto_run_problem_samples(state: OJCoachState, tools: Any, reason: str) -> bool:
+    if not state.code.strip():
+        return False
+    if not state.language.strip() or state.language == "未知":
+        return False
+    if not state.problem_text.strip() or not state.analysis_result.strip():
+        return False
+
+    sample_count = _count_runnable_problem_cases(state.analysis_result)
+    if sample_count <= 0:
+        return False
+
+    print(f"检测到{reason}，将自动运行 {sample_count} 组题目样例...")
+    result = _invoke_oj_tool(
+        tools,
+        "run_oj_code",
+        {
+            "language": state.language,
+            "code": state.code,
+            "stdin": "",
+            "expected_output": "",
+            "timeout_ms": state.timeout_ms,
+            "problem_text": state.problem_text,
+            "test_cases": state.test_cases,
+        },
+    )
+    state.last_run_result = result
+    _print_run_result(result)
+    return True
+
+
+def _count_runnable_problem_cases(analysis_result: str) -> int:
+    try:
+        payload = json.loads(analysis_result)
+    except json.JSONDecodeError:
+        return 0
+
+    cases = payload.get("测试用例", [])
+    if not isinstance(cases, list):
+        return 0
+
+    runnable_count = 0
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        stdin = str(case.get("stdin", "")).strip()
+        expected_output = str(case.get("expected_output", "")).strip()
+        if stdin and expected_output:
+            runnable_count += 1
+    return runnable_count
+
+
 def _invoke_oj_tool(tools: Any, name: str, args: dict[str, Any]) -> str:
     return tools.invoke(name, args)
 
 
-def _apply_code_payload(raw_result: str, state: OJCoachState) -> None:
+def _apply_code_payload(raw_result: str, state: OJCoachState) -> bool:
     if _looks_like_error(raw_result):
         print(raw_result)
-        return
+        return False
 
     try:
         payload = json.loads(raw_result)
     except json.JSONDecodeError:
         print(f"错误：读取代码结果不是 JSON：{raw_result}")
-        return
+        return False
 
     code = str(payload.get("code", ""))
     language = str(payload.get("language", ""))
     if not code.strip():
         print("错误：读取到的代码为空。")
-        return
+        return False
 
     state.code = code
     state.language = language
     state.last_run_result = ""
     print(f"已读取 {language} 代码，共 {len(state.code)} 个字符。")
+    return True
 
 
 def _print_run_result(raw_result: str) -> None:
@@ -427,9 +507,9 @@ def _print_help() -> None:
     print(
         """
 可用命令：
-  /paste_problem              粘贴题目文本，直到 END
-  /load_problem <path>        从 .txt / .md / .docx 读取题目
-  /analyze                    分析当前题目
+  /paste_problem              粘贴题目文本，直到 END；成功后会自动分析
+  /load_problem <path>        从 .txt / .md / .docx 读取题目；成功后会自动分析
+  /analyze                    重新分析当前题目
   /paste_code <language>      粘贴完整 OJ 代码，language 为 python/cpp/java
   /load_code <path>           从 .py / .cpp / .java 读取代码并识别语言
   /set_stdin                  粘贴测试输入，直到 END
@@ -443,6 +523,7 @@ def _print_help() -> None:
   /exit                       退出
 
 多行粘贴时，单独输入 END 结束。
+如果题目分析结果里提取到了可运行样例，并且当前已有代码，会自动运行题目样例。
 """.strip()
     )
 
