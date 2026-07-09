@@ -27,14 +27,18 @@ except ImportError:
 
 def get_base_url() -> str:
     """获取 LLM API 的 Base URL。"""
-    base_url = os.environ.get("BASE_URL")
+    # 使用 or 兜底，是为了兼容 .env 中 BASE_URL= 这种空值写法。
+    endpoint = os.getenv("CNB_API_ENDPOINT", "")
+    repo_slug = os.getenv("CNB_REPO_SLUG", "")
+    cnb_base_url = (
+        f"{endpoint}/{repo_slug}/-/ai-ide/v2"
+        if endpoint and repo_slug
+        else ""
+    )
+
+    base_url = os.getenv("BASE_URL") or cnb_base_url
     if base_url:
         return base_url
-
-    endpoint = os.environ.get("CNB_API_ENDPOINT", "")
-    repo_slug = os.environ.get("CNB_REPO_SLUG", "")
-    if endpoint and repo_slug:
-        return f"{endpoint}/{repo_slug}/-/ai-ide/v2"
 
     raise EnvironmentError(
         "请设置 BASE_URL，或同时设置 CNB_API_ENDPOINT 和 CNB_REPO_SLUG 环境变量"
@@ -43,7 +47,7 @@ def get_base_url() -> str:
 
 def get_api_key() -> str:
     """获取 API Key。优先读取 `API_KEY`，否则读取 `CNB_TOKEN`。"""
-    api_key = os.environ.get("API_KEY") or os.environ.get("CNB_TOKEN")
+    api_key = os.getenv("API_KEY") or os.getenv("CNB_TOKEN", "")
     if not api_key:
         raise EnvironmentError("请设置 API_KEY 或 CNB_TOKEN 环境变量")
     return api_key
@@ -51,7 +55,7 @@ def get_api_key() -> str:
 
 def get_model_id() -> str:
     """获取模型 ID，默认 `glm-5.0`。"""
-    return os.environ.get("MODEL_ID", "glm-5.0")
+    return os.getenv("MODEL_ID") or "glm-5.0"
 
 
 def make_client():
