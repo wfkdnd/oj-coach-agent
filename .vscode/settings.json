@@ -31,6 +31,12 @@
     "terminal.integrated.env.linux": {
       "VIRTUAL_ENV": "${workspaceFolder}/.venv",
       "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+    },
+
+    // Code Runner 的“运行”按钮不一定读取 Python 扩展解释器设置，这里显式固定到根 .venv。
+    "code-runner.runInTerminal": true,
+    "code-runner.executorMap": {
+      "python": "${workspaceFolder}/.venv/bin/python -u"
     }
   }
   
