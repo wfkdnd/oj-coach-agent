@@ -3,7 +3,7 @@ $:
     - runner:
         cpus: 16
       docker:
-        image: cnbcool/default-dev-env:latest
+        image: docker.cnb.cool/looc/default-dev-env:latest
         build: .ide/Dockerfile
       env:
         VIRTUAL_ENV_DISABLE_PROMPT: "1"
