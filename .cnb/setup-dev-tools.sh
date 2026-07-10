@@ -2,15 +2,15 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
+export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/default-java}"
 
 install_with_apt() {
   if command -v sudo >/dev/null 2>&1; then
     sudo apt-get update
-    sudo apt-get install -y --no-install-recommends build-essential openjdk-17-jdk
+    sudo apt-get install -y --no-install-recommends build-essential default-jdk python-is-python3
   else
     apt-get update
-    apt-get install -y --no-install-recommends build-essential openjdk-17-jdk
+    apt-get install -y --no-install-recommends build-essential default-jdk python-is-python3
   fi
 }
 
@@ -29,7 +29,7 @@ export PATH="/workspace/.local/bin:/workspace/.venv/bin:${PATH}"
 
 shell_rc="${HOME}/.zshrc"
 path_line='export PATH="/workspace/.local/bin:/workspace/.venv/bin:${PATH}"'
-java_home_line='export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"'
+java_home_line='export JAVA_HOME="/usr/lib/jvm/default-java"'
 
 if [ -d "${HOME}" ] && [ -w "${HOME}" ]; then
   touch "${shell_rc}"
