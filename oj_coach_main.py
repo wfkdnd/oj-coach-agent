@@ -34,6 +34,41 @@ OJ_COACH_SYSTEM_PROMPT = """\
 - 不保存用户完整代码或敏感信息。
 """
 
+TEST_CASE_EXTRACT_SYSTEM_PROMPT = """\
+你是一个严谨的算法题样例提取器。
+你的任务是从题目文本中提取可运行样例，返回严格 JSON。
+不要解释，不要使用 Markdown，不要改写输入输出内容。
+"""
+
+TEST_CASE_EXTRACT_USER_PROMPT = """\
+请从下面的算法题文本中提取样例输入和样例输出。
+
+要求：
+1. 只返回 JSON 对象，不要返回额外文字。
+2. JSON schema 必须是：
+   {{
+     "test_cases": [
+       {{
+         "name": "示例 1",
+         "source": "LLM 题目样例",
+         "stdin": "样例输入内容",
+         "expected_output": "样例输出内容",
+         "explanation": "样例解释，没有则为空字符串"
+       }}
+     ],
+     "warnings": []
+   }}
+3. stdin 只包含输入内容。
+4. expected_output 只包含输出内容。
+5. “解释”“说明”“提示”“约束”等内容不能混入 expected_output。
+6. 保留原始大小写、空格、换行和 true/false 这类输出格式。
+7. 如果是 LeetCode 风格的“n = 2”“nums = [...]”，请把这些输入变量逐行放入 stdin。
+8. 如果没有可提取样例，返回 {{"test_cases": [], "warnings": ["未找到样例"]}}。
+
+题目文本：
+{problem_text}
+"""
+
 
 @dataclass
 class OJCoachState:
@@ -43,6 +78,7 @@ class OJCoachState:
     stdin: str = ""
     expected_output: str = ""
     test_cases: str = ""
+    problem_test_cases_json: str = ""
     last_run_result: str = ""
     analysis_result: str = ""
     timeout_ms: int = DEFAULT_TIMEOUT_MS
@@ -56,7 +92,8 @@ def main() -> None:
     print("OJ Coach Agent")
     print("=" * 50)
     print("输入 /help 查看命令，输入 /exit 退出。")
-    print("读取题目后会自动分析；题目样例和代码都就绪时会自动运行。")
+    print("读取题目后会自动分析，并尝试用 LLM 提取样例 JSON。")
+    print("题目样例和代码都就绪时会自动运行。")
     print("安全提示：/run 会执行当前代码，请只运行可信代码。")
 
     while True:
@@ -125,8 +162,10 @@ def _cmd_paste_problem(state: OJCoachState, tools: Any) -> None:
 
     state.problem_text = result
     state.analysis_result = ""
+    state.problem_test_cases_json = ""
     print(f"已读取题目文本，共 {len(state.problem_text)} 个字符。")
     _auto_analyze_problem(state, tools)
+    _auto_extract_problem_test_cases_with_llm(state)
     _maybe_auto_run_problem_samples(state, tools, "题目已更新")
 
 
@@ -142,8 +181,10 @@ def _cmd_load_problem(args: str, state: OJCoachState, tools: Any) -> None:
 
     state.problem_text = result
     state.analysis_result = ""
+    state.problem_test_cases_json = ""
     print(f"已读取题目文件，共 {len(state.problem_text)} 个字符。")
     _auto_analyze_problem(state, tools)
+    _auto_extract_problem_test_cases_with_llm(state)
     _maybe_auto_run_problem_samples(state, tools, "题目已更新")
 
 
@@ -160,6 +201,7 @@ def _cmd_analyze(state: OJCoachState, tools: Any) -> None:
     state.analysis_result = result
     print("\n题目分析：")
     print(result)
+    _auto_extract_problem_test_cases_with_llm(state)
     _maybe_auto_run_problem_samples(state, tools, "题目分析已更新")
 
 
@@ -235,6 +277,7 @@ def _cmd_run(state: OJCoachState, tools: Any) -> None:
         return
 
     print("正在运行当前代码...")
+    case_args = _build_run_case_args(state)
     result = _invoke_oj_tool(
         tools,
         "run_oj_code",
@@ -244,8 +287,8 @@ def _cmd_run(state: OJCoachState, tools: Any) -> None:
             "stdin": state.stdin,
             "expected_output": state.expected_output,
             "timeout_ms": state.timeout_ms,
-            "problem_text": state.problem_text,
-            "test_cases": state.test_cases,
+            "problem_text": case_args["problem_text"],
+            "test_cases": case_args["test_cases"],
         },
     )
     state.last_run_result = result
@@ -336,6 +379,50 @@ def _auto_analyze_problem(state: OJCoachState, tools: Any) -> bool:
     return True
 
 
+def _auto_extract_problem_test_cases_with_llm(state: OJCoachState) -> bool:
+    if not state.problem_text.strip():
+        return False
+
+    llm = _try_create_llm()
+    if llm is None:
+        state.problem_test_cases_json = ""
+        print("LLM 样例提取不可用，将保留现有规则提取/手动用例流程。")
+        return False
+
+    print("正在用 LLM 提取题目样例 JSON...")
+    messages = [
+        {"role": "system", "content": TEST_CASE_EXTRACT_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": TEST_CASE_EXTRACT_USER_PROMPT.format(problem_text=state.problem_text),
+        },
+    ]
+
+    try:
+        raw_result = llm.chat(messages, temperature=0)
+    except Exception as exc:
+        state.problem_test_cases_json = ""
+        print(f"LLM 样例提取失败，将回退到规则提取：{exc}")
+        return False
+
+    payload = _normalize_llm_test_case_payload(raw_result)
+    if payload is None:
+        state.problem_test_cases_json = ""
+        print("LLM 返回的样例不是合法 JSON，将回退到规则提取。")
+        return False
+
+    state.problem_test_cases_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    sample_count = _count_runnable_cases_json(state.problem_test_cases_json)
+    warnings = payload.get("warnings") or []
+    if sample_count:
+        print(f"LLM 样例提取完成，得到 {sample_count} 组可运行样例。")
+    else:
+        print("LLM 样例提取完成，但没有得到可运行样例。")
+    if warnings:
+        print("LLM 样例提取提示：" + "；".join(str(item) for item in warnings))
+    return sample_count > 0
+
+
 def _maybe_auto_run_problem_samples(state: OJCoachState, tools: Any, reason: str) -> bool:
     if not state.code.strip():
         return False
@@ -344,11 +431,12 @@ def _maybe_auto_run_problem_samples(state: OJCoachState, tools: Any, reason: str
     if not state.problem_text.strip() or not state.analysis_result.strip():
         return False
 
-    sample_count = _count_runnable_problem_cases(state.analysis_result)
+    sample_count = _count_runnable_problem_cases_from_state(state)
     if sample_count <= 0:
         return False
 
     print(f"检测到{reason}，将自动运行 {sample_count} 组题目样例...")
+    case_args = _build_run_case_args(state)
     result = _invoke_oj_tool(
         tools,
         "run_oj_code",
@@ -358,13 +446,187 @@ def _maybe_auto_run_problem_samples(state: OJCoachState, tools: Any, reason: str
             "stdin": "",
             "expected_output": "",
             "timeout_ms": state.timeout_ms,
-            "problem_text": state.problem_text,
-            "test_cases": state.test_cases,
+            "problem_text": case_args["problem_text"],
+            "test_cases": case_args["test_cases"],
         },
     )
     state.last_run_result = result
     _print_run_result(result)
     return True
+
+
+def _build_run_case_args(state: OJCoachState) -> dict[str, str]:
+    """运行器优先读取 LLM 生成的样例 JSON；没有 JSON 时才读取原题面。"""
+    test_cases = _build_run_test_cases_json(state)
+    if _count_runnable_cases_json(state.problem_test_cases_json):
+        return {"problem_text": "", "test_cases": test_cases}
+    return {"problem_text": state.problem_text, "test_cases": test_cases}
+
+
+def _build_run_test_cases_json(state: OJCoachState) -> str:
+    if not _count_runnable_cases_json(state.problem_test_cases_json):
+        return state.test_cases
+
+    problem_cases = _extract_cases_from_json_text(state.problem_test_cases_json)
+    if not state.test_cases.strip():
+        return state.problem_test_cases_json
+
+    extra_cases = _extract_cases_from_json_text(state.test_cases)
+    if not extra_cases:
+        print("提示：当前已有 LLM 样例 JSON；额外 /set_cases 不是 JSON 格式，本次运行只使用 LLM 样例和手动 stdin/expected。")
+        return state.problem_test_cases_json
+
+    merged = {
+        "test_cases": problem_cases + extra_cases,
+        "warnings": ["已合并 LLM 题目样例和用户额外 JSON 用例"],
+    }
+    return json.dumps(merged, ensure_ascii=False, indent=2)
+
+
+def _normalize_llm_test_case_payload(raw_result: str) -> dict[str, Any] | None:
+    json_text = _extract_json_text(raw_result)
+    if not json_text:
+        return None
+
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError:
+        return None
+
+    if isinstance(payload, list):
+        payload = {"test_cases": payload}
+    if not isinstance(payload, dict):
+        return None
+
+    raw_cases = _first_present(payload, ("test_cases", "cases", "测试用例", "样例"))
+    if not isinstance(raw_cases, list):
+        raw_cases = []
+
+    warnings = payload.get("warnings", [])
+    if isinstance(warnings, str):
+        warnings = [warnings]
+    elif not isinstance(warnings, list):
+        warnings = []
+
+    return {
+        "test_cases": _normalize_case_items(raw_cases),
+        "warnings": [str(item) for item in warnings],
+    }
+
+
+def _normalize_case_items(raw_cases: list[Any]) -> list[dict[str, str]]:
+    cases: list[dict[str, str]] = []
+    for index, item in enumerate(raw_cases, start=1):
+        if not isinstance(item, dict):
+            continue
+
+        stdin = str(_first_present(item, ("stdin", "input", "输入")) or "")
+        expected_output = str(_first_present(item, ("expected_output", "expected", "output", "输出")) or "")
+        stdin = _normalize_case_text(stdin)
+        expected_output = _strip_explanation_tail(_normalize_case_text(expected_output))
+
+        if not stdin and not expected_output:
+            continue
+
+        name = str(_first_present(item, ("name", "名称")) or f"示例 {index}")
+        source = str(_first_present(item, ("source", "来源")) or "LLM 题目样例")
+        cases.append(
+            {
+                "name": name,
+                "source": source,
+                "stdin": stdin,
+                "expected_output": expected_output,
+            }
+        )
+    return cases
+
+
+def _extract_cases_from_json_text(text: str) -> list[dict[str, str]]:
+    payload = _normalize_llm_test_case_payload(text)
+    if not payload:
+        return []
+    cases = payload.get("test_cases", [])
+    return cases if isinstance(cases, list) else []
+
+
+def _extract_json_text(raw_result: str) -> str:
+    text = raw_result.strip()
+    if not text:
+        return ""
+
+    fenced_start = text.find("```")
+    if fenced_start != -1:
+        fenced_end = text.rfind("```")
+        if fenced_end > fenced_start:
+            inner = text[fenced_start + 3 : fenced_end].strip()
+            if inner.lower().startswith("json"):
+                inner = inner[4:].strip()
+            text = inner
+
+    object_start = text.find("{")
+    object_end = text.rfind("}")
+    if object_start != -1 and object_end != -1 and object_start < object_end:
+        return text[object_start : object_end + 1]
+
+    array_start = text.find("[")
+    array_end = text.rfind("]")
+    if array_start != -1 and array_end != -1 and array_start < array_end:
+        return text[array_start : array_end + 1]
+    return ""
+
+
+def _first_present(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return None
+
+
+def _normalize_case_text(text: str) -> str:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(line.rstrip() for line in lines)
+
+
+def _strip_explanation_tail(text: str) -> str:
+    explanation_headings = (
+        "解释",
+        "说明",
+        "提示",
+        "备注",
+        "约束",
+        "constraints",
+        "explanation",
+        "note",
+    )
+    kept_lines: list[str] = []
+    for line in text.splitlines():
+        heading = line.strip().strip("#* -").strip().rstrip("：:").lower()
+        if heading in explanation_headings:
+            break
+        kept_lines.append(line)
+    return _normalize_case_text("\n".join(kept_lines))
+
+
+def _count_runnable_problem_cases_from_state(state: OJCoachState) -> int:
+    llm_count = _count_runnable_cases_json(state.problem_test_cases_json)
+    if llm_count:
+        return llm_count
+    return _count_runnable_problem_cases(state.analysis_result)
+
+
+def _count_runnable_cases_json(raw_json: str) -> int:
+    cases = _extract_cases_from_json_text(raw_json)
+    runnable_count = 0
+    for case in cases:
+        stdin = str(case.get("stdin", "")).strip()
+        expected_output = str(case.get("expected_output", "")).strip()
+        if stdin and expected_output:
+            runnable_count += 1
+    return runnable_count
 
 
 def _count_runnable_problem_cases(analysis_result: str) -> int:
@@ -615,6 +877,10 @@ def _print_status(state: OJCoachState) -> None:
     print(f"- stdin: {_yes_no(state.stdin)} ({len(state.stdin)} chars)")
     print(f"- expected_output: {_yes_no(state.expected_output)} ({len(state.expected_output)} chars)")
     print(f"- test_cases: {_yes_no(state.test_cases)} ({len(state.test_cases)} chars)")
+    print(
+        f"- problem_test_cases_json: {_yes_no(state.problem_test_cases_json)} "
+        f"({_count_runnable_cases_json(state.problem_test_cases_json)} runnable cases)"
+    )
     print(f"- last_run_result: {_yes_no(state.last_run_result)}")
     print(f"- timeout_ms: {state.timeout_ms}")
 
@@ -639,7 +905,9 @@ def _print_help() -> None:
   /exit                       退出
 
 多行粘贴时，单独输入 END 结束。
-如果题目分析结果里提取到了可运行样例，并且当前已有代码，会自动运行题目样例。
+读取或分析题目后，会优先调用 LLM 把样例输入/输出提取成 JSON。
+/run 会优先读取这个 JSON；如果 LLM 不可用或 JSON 不合法，再回退到规则提取或手动用例。
+如果题目样例和当前代码都就绪，会自动运行题目样例。
 """.strip()
     )
 
