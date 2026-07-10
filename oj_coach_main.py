@@ -1,90 +1,26 @@
 """
 OJ Coach 专用终端入口。
 
-这个入口与通用 main.py 分开：它不让模型自由选择工具，而是用明确的
-`/` 命令维护刷题状态，再把状态交给 oj_tools 中的确定性工具处理。
+这个文件只负责 CLI 交互：读取 `/` 命令、接收多行输入、打印结果。
+刷题状态、工具调用、LLM 提示词和自动运行逻辑都放在 `OJCoachSession` 中。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import shlex
 import sys
 from typing import Any
 
-from oj_tools import build_oj_tools
+from oj_coach import OJCoachSession
 
 
 END_MARKER = "END"
-DEFAULT_TIMEOUT_MS = 3000
-MAX_CONTEXT_CHARS = 6000
-
-OJ_COACH_SYSTEM_PROMPT = """\
-你是算法刷题陪练 Agent。
-
-你的目标不是直接给最终答案，而是陪用户完成：
-读题 -> 写代码 -> 运行 -> 定位错误 -> 修正 -> 复盘。
-
-回答规范：
-- 优先基于当前提供的上下文和最近一次真实运行结果回答。
-- 不要捏造运行结果；只有上下文里已有 run_oj_code 的结果时，才能称为运行结果。
-- 对编译错误、运行错误、Wrong Answer、TLE 要翻译成人话。
-- 默认先给方向、关键观察和定位建议；用户明确要求完整代码时再给完整代码。
-- 不保存用户完整代码或敏感信息。
-"""
-
-TEST_CASE_EXTRACT_SYSTEM_PROMPT = """\
-你是一个严谨的算法题样例提取器。
-你的任务是从题目文本中提取可运行样例，返回严格 JSON。
-不要解释，不要使用 Markdown，不要改写输入输出内容。
-"""
-
-TEST_CASE_EXTRACT_USER_PROMPT = """\
-请从下面的算法题文本中提取样例输入和样例输出。
-
-要求：
-1. 只返回 JSON 对象，不要返回额外文字。
-2. JSON schema 必须是：
-   {{
-     "test_cases": [
-       {{
-         "name": "示例 1",
-         "source": "题目",
-         "stdin": "样例输入内容",
-         "expected_output": "样例输出内容",
-         "explanation": "样例解释，没有则为空字符串"
-       }}
-     ],
-     "warnings": []
-   }}
-3. stdin 只包含输入内容。
-4. expected_output 只包含输出内容。
-5. “解释”“说明”“提示”“约束”等内容不能混入 expected_output。
-6. 保留原始大小写、空格、换行和 true/false 这类输出格式。
-7. 如果是 LeetCode 风格的“n = 2”“nums = [...]”，请把这些输入变量逐行放入 stdin。
-8. 如果没有可提取样例，返回 {{"test_cases": [], "warnings": ["未找到样例"]}}。
-
-题目文本：
-{problem_text}
-"""
-
-
-@dataclass
-class OJCoachState:
-    problem_text: str = ""
-    language: str = ""
-    code: str = ""
-    test_cases: str = ""
-    last_run_result: str = ""
-    analysis_result: str = ""
-    timeout_ms: int = DEFAULT_TIMEOUT_MS
 
 
 def main() -> None:
     _configure_utf8_output()
-    state = OJCoachState()
-    tools = build_oj_tools()
+    session = OJCoachSession()
 
     print("OJ Coach Agent")
     print("=" * 50)
@@ -112,120 +48,73 @@ def main() -> None:
             return
 
         try:
-            _handle_command(command, args, state, tools)
+            _handle_command(command, args, session)
         except Exception as exc:
             print(f"错误：命令执行失败：{exc}")
 
 
-def _handle_command(command: str, args: str, state: OJCoachState, tools: Any) -> None:
+def _handle_command(command: str, args: str, session: OJCoachSession) -> None:
     if command in {"help", "h", "?"}:
         _print_help()
     elif command == "status":
-        _print_status(state)
+        _print_status(session)
     elif command == "paste_problem":
-        _cmd_paste_problem(state, tools)
+        _cmd_paste_problem(session)
     elif command == "load_problem":
-        _cmd_load_problem(args, state, tools)
+        _cmd_load_problem(args, session)
     elif command == "analyze":
-        _cmd_analyze(state, tools)
+        _cmd_analyze(session)
     elif command == "paste_code":
-        _cmd_paste_code(args, state, tools)
+        _cmd_paste_code(args, session)
     elif command == "load_code":
-        _cmd_load_code(args, state, tools)
-    elif command == "set_stdin":
-        _cmd_deprecated_single_case()
-    elif command == "set_expected":
+        _cmd_load_code(args, session)
+    elif command in {"set_stdin", "set_expected"}:
         _cmd_deprecated_single_case()
     elif command == "set_cases":
-        _cmd_set_cases(state)
+        _cmd_set_cases(session)
     elif command == "set_timeout":
-        _cmd_set_timeout(args, state)
+        _cmd_set_timeout(args, session)
     elif command == "run":
-        _cmd_run(state, tools)
+        _cmd_run(session)
     elif command == "ask":
-        _cmd_ask(args, state)
+        _cmd_ask(args, session)
     elif command == "summary":
-        _cmd_summary(args, state, tools)
+        _cmd_summary(args, session)
     else:
         print(f"未知命令：/{command}。可用 /help 查看帮助。")
 
 
-def _cmd_paste_problem(state: OJCoachState, tools: Any) -> None:
+def _cmd_paste_problem(session: OJCoachSession) -> None:
     text = _read_multiline("请粘贴题目文本，单独输入 END 结束：")
-    result = _invoke_oj_tool(tools, "read_problem", {"problem_text": text})
-    if _looks_like_error(result):
-        print(result)
-        return
-
-    state.problem_text = result
-    state.analysis_result = ""
-    _replace_cases_by_source(state, "题目", [])
-    print(f"已读取题目文本，共 {len(state.problem_text)} 个字符。")
-    _auto_analyze_problem(state, tools)
-    _auto_extract_problem_test_cases_with_llm(state)
-    _maybe_auto_run_problem_samples(state, tools, "题目已更新")
+    _print_session_result(session.set_problem_text(text))
 
 
-def _cmd_load_problem(args: str, state: OJCoachState, tools: Any) -> None:
+def _cmd_load_problem(args: str, session: OJCoachSession) -> None:
     path = _require_single_arg(args, "用法：/load_problem path/to/problem.md")
     if not path:
         return
-
-    result = _invoke_oj_tool(tools, "read_problem_file", {"file_path": path})
-    if _looks_like_error(result):
-        print(result)
-        return
-
-    state.problem_text = result
-    state.analysis_result = ""
-    _replace_cases_by_source(state, "题目", [])
-    print(f"已读取题目文件，共 {len(state.problem_text)} 个字符。")
-    _auto_analyze_problem(state, tools)
-    _auto_extract_problem_test_cases_with_llm(state)
-    _maybe_auto_run_problem_samples(state, tools, "题目已更新")
+    _print_session_result(session.load_problem_file(path))
 
 
-def _cmd_analyze(state: OJCoachState, tools: Any) -> None:
-    if not state.problem_text.strip():
-        print("请先使用 /paste_problem 或 /load_problem 读取题目。")
-        return
-
-    result = _invoke_oj_tool(tools, "analyze_problem", {"problem_text": state.problem_text})
-    if _looks_like_error(result):
-        print(result)
-        return
-
-    state.analysis_result = result
-    print("\n题目分析：")
-    print(result)
-    _auto_extract_problem_test_cases_with_llm(state)
-    _maybe_auto_run_problem_samples(state, tools, "题目分析已更新")
+def _cmd_analyze(session: OJCoachSession) -> None:
+    _print_session_result(session.analyze_problem(), show_analysis=True)
 
 
-def _cmd_paste_code(args: str, state: OJCoachState, tools: Any) -> None:
+def _cmd_paste_code(args: str, session: OJCoachSession) -> None:
     language = args.strip()
     if not language:
         print("用法：/paste_code python|cpp|java")
         return
 
     code_text = _read_multiline("请粘贴完整 OJ 代码，单独输入 END 结束：")
-    raw_result = _invoke_oj_tool(
-        tools,
-        "read_code",
-        {"code_text": code_text, "language": language},
-    )
-    if _apply_code_payload(raw_result, state):
-        _maybe_auto_run_problem_samples(state, tools, "代码已更新")
+    _print_session_result(session.set_code(code_text, language))
 
 
-def _cmd_load_code(args: str, state: OJCoachState, tools: Any) -> None:
+def _cmd_load_code(args: str, session: OJCoachSession) -> None:
     path = _require_single_arg(args, "用法：/load_code path/to/main.py")
     if not path:
         return
-
-    raw_result = _invoke_oj_tool(tools, "read_code_file", {"file_path": path})
-    if _apply_code_payload(raw_result, state):
-        _maybe_auto_run_problem_samples(state, tools, "代码已更新")
+    _print_session_result(session.load_code_file(path))
 
 
 def _cmd_deprecated_single_case() -> None:
@@ -233,74 +122,31 @@ def _cmd_deprecated_single_case() -> None:
     print("示例格式：\n输入：\n1 2\n输出：\n3\nEND")
 
 
-def _cmd_set_cases(state: OJCoachState) -> None:
+def _cmd_set_cases(session: OJCoachSession) -> None:
     raw_cases = _read_multiline(
         "请粘贴用户测试用例，支持 JSON 或“输入:/输出:”文本格式，单独输入 END 结束："
     )
-    user_cases = _parse_user_cases(raw_cases)
-    if not user_cases:
-        print("没有识别到可运行测试用例，请确认每组用例同时包含输入和期望输出。")
-        return
-
-    existing_cases = _extract_cases_from_json_text(state.test_cases)
-    state.test_cases = _serialize_cases(existing_cases + user_cases)
-    print(f"已添加 {len(user_cases)} 组用户测试用例；当前共有 {_count_runnable_cases_json(state.test_cases)} 组可运行用例。")
+    _print_session_result(session.add_cases(raw_cases))
 
 
-def _cmd_set_timeout(args: str, state: OJCoachState) -> None:
+def _cmd_set_timeout(args: str, session: OJCoachSession) -> None:
     value = args.strip()
     if not value:
-        print(f"当前超时时间：{state.timeout_ms}ms。用法：/set_timeout 3000")
+        print(f"当前超时时间：{session.status()['timeout_ms']}ms。用法：/set_timeout 3000")
         return
-
-    try:
-        timeout_ms = int(value)
-    except ValueError:
-        print("错误：timeout_ms 必须是整数。")
-        return
-
-    if timeout_ms <= 0:
-        print("错误：timeout_ms 必须大于 0。")
-        return
-
-    state.timeout_ms = timeout_ms
-    print(f"已设置超时时间：{state.timeout_ms}ms。")
+    _print_session_result(session.set_timeout(value))
 
 
-def _cmd_run(state: OJCoachState, tools: Any) -> None:
-    if not state.code.strip():
-        print("请先使用 /paste_code 或 /load_code 读取完整 OJ 代码。")
-        return
-    if not state.language.strip() or state.language == "未知":
-        print("请先提供代码语言，例如 /paste_code python 或 /load_code main.cpp。")
-        return
-
-    print("正在运行当前代码...")
-    case_args = _build_run_case_args(state)
-    result = _invoke_oj_tool(
-        tools,
-        "run_oj_code",
-        {
-            "language": state.language,
-            "code": state.code,
-            "stdin": "",
-            "expected_output": "",
-            "timeout_ms": state.timeout_ms,
-            "problem_text": case_args["problem_text"],
-            "test_cases": case_args["test_cases"],
-        },
-    )
-    state.last_run_result = result
-    _print_run_result(result)
-
-    # 自动 LLM 解释层
-    llm = _try_create_llm()
-    if llm is not None:
+def _cmd_run(session: OJCoachSession) -> None:
+    result = session.run_code()
+    _print_session_result(result)
+    llm_explanation = result.get("llm_explanation", "")
+    if llm_explanation:
         print("\n--- LLM 分析 ---")
-        _llm_explain_run(state, llm)
+        print(llm_explanation)
 
 
-def _cmd_ask(args: str, state: OJCoachState) -> None:
+def _cmd_ask(args: str, session: OJCoachSession) -> None:
     question = args.strip()
     if not question:
         question = _read_multiline("请粘贴你的问题，单独输入 END 结束：").strip()
@@ -308,487 +154,41 @@ def _cmd_ask(args: str, state: OJCoachState) -> None:
         print("问题为空，已取消。")
         return
 
-    llm = _try_create_llm()
-    if llm is None:
-        print("当前未能初始化 LLM。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。")
-        print("你仍然可以使用 /run 查看真实运行结果，或使用 /summary 生成规则版复盘。")
-        return
-
-    messages = [
-        {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
-        {"role": "user", "content": _build_question_context(question, state)},
-    ]
-
     print("\n回答：")
-    for chunk in llm.chat_stream(messages):
+    for chunk in session.ask_stream(question):
         print(chunk, end="", flush=True)
     print()
 
 
-def _cmd_summary(args: str, state: OJCoachState, tools: Any) -> None:
-    if not state.problem_text.strip():
-        print("请先使用 /paste_problem 或 /load_problem 读取题目。")
-        return
-    if not state.code.strip():
-        print("请先使用 /paste_code 或 /load_code 读取代码。")
-        return
-    if not state.last_run_result.strip():
-        print("请先使用 /run 运行一次代码，再做复盘。")
+def _cmd_summary(args: str, session: OJCoachSession) -> None:
+    result = session.summarize(args.strip())
+    _print_session_messages(result)
+    if not result.get("ok"):
         return
 
-    notes = args.strip()
-    result = _invoke_oj_tool(
-        tools,
-        "summarize_practice",
-        {
-            "problem_text": state.problem_text,
-            "code": state.code,
-            "run_result": state.last_run_result,
-            "notes": notes,
-        },
-    )
     print("\n规则版复盘总结：")
-    print(result)
+    print(result.get("rule_summary", ""))
 
-    llm = _try_create_llm()
-    if llm is None:
+    llm_summary = result.get("llm_summary", "")
+    if llm_summary:
+        print("\n--- LLM 讲解版复盘 ---")
+        print(llm_summary)
+    else:
         print("\n当前未能初始化 LLM，仅展示规则版复盘。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。")
-        return
 
-    print("\n--- LLM 讲解版复盘 ---")
-    _llm_explain_summary(state, result, notes, llm)
 
+def _print_session_result(result: dict[str, Any], show_analysis: bool = False) -> None:
+    _print_session_messages(result)
+    if show_analysis and result.get("analysis_result"):
+        print("\n题目分析：")
+        print(result["analysis_result"])
+    if result.get("run_result"):
+        _print_run_result(result["run_result"])
 
-def _auto_analyze_problem(state: OJCoachState, tools: Any) -> bool:
-    if not state.problem_text.strip():
-        return False
 
-    print("正在自动分析题目...")
-    result = _invoke_oj_tool(tools, "analyze_problem", {"problem_text": state.problem_text})
-    if _looks_like_error(result):
-        print(result)
-        return False
-
-    state.analysis_result = result
-    sample_count = _count_runnable_problem_cases(result)
-    if sample_count:
-        print(f"自动分析完成，提取到 {sample_count} 组可运行题目样例。")
-    else:
-        print("自动分析完成，但没有提取到可直接运行的题目样例。")
-    return True
-
-
-def _auto_extract_problem_test_cases_with_llm(state: OJCoachState) -> bool:
-    if not state.problem_text.strip():
-        return False
-
-    llm = _try_create_llm()
-    if llm is None:
-        print("LLM 样例提取不可用，将保留现有规则提取/手动用例流程。")
-        _extract_problem_test_cases_from_analysis(state)
-        return False
-
-    print("正在用 LLM 提取题目样例 JSON...")
-    messages = [
-        {"role": "system", "content": TEST_CASE_EXTRACT_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": TEST_CASE_EXTRACT_USER_PROMPT.format(problem_text=state.problem_text),
-        },
-    ]
-
-    try:
-        raw_result = llm.chat(messages, temperature=0)
-    except Exception as exc:
-        print(f"LLM 样例提取失败，将回退到规则提取：{exc}")
-        return _extract_problem_test_cases_from_analysis(state)
-
-    payload = _normalize_llm_test_case_payload(raw_result)
-    if payload is None:
-        print("LLM 返回的样例不是合法 JSON，将回退到规则提取。")
-        return _extract_problem_test_cases_from_analysis(state)
-
-    problem_cases = _set_case_source(payload.get("test_cases", []), "题目")
-    _replace_cases_by_source(state, "题目", problem_cases)
-    sample_count = _count_cases(problem_cases)
-    warnings = payload.get("warnings") or []
-    if sample_count:
-        print(f"LLM 样例提取完成，得到 {sample_count} 组可运行样例。")
-    else:
-        print("LLM 样例提取完成，但没有得到可运行样例。")
-    if warnings:
-        print("LLM 样例提取提示：" + "；".join(str(item) for item in warnings))
-    return sample_count > 0
-
-
-def _maybe_auto_run_problem_samples(state: OJCoachState, tools: Any, reason: str) -> bool:
-    if not state.code.strip():
-        return False
-    if not state.language.strip() or state.language == "未知":
-        return False
-    if not state.problem_text.strip() or not state.analysis_result.strip():
-        return False
-
-    sample_count = _count_runnable_problem_cases_from_state(state)
-    if sample_count <= 0:
-        return False
-
-    print(f"检测到{reason}，将自动运行 {sample_count} 组测试用例...")
-    case_args = _build_run_case_args(state)
-    result = _invoke_oj_tool(
-        tools,
-        "run_oj_code",
-        {
-            "language": state.language,
-            "code": state.code,
-            "stdin": "",
-            "expected_output": "",
-            "timeout_ms": state.timeout_ms,
-            "problem_text": case_args["problem_text"],
-            "test_cases": case_args["test_cases"],
-        },
-    )
-    state.last_run_result = result
-    _print_run_result(result)
-    return True
-
-
-def _build_run_case_args(state: OJCoachState) -> dict[str, str]:
-    """运行器只读取统一后的 test_cases JSON，不再读取分散的 stdin/expected_output。"""
-    return {"problem_text": "", "test_cases": state.test_cases}
-
-
-def _normalize_llm_test_case_payload(raw_result: str, default_source: str = "题目") -> dict[str, Any] | None:
-    json_text = _extract_json_text(raw_result)
-    if not json_text:
-        return None
-
-    try:
-        payload = json.loads(json_text)
-    except json.JSONDecodeError:
-        return None
-
-    if isinstance(payload, list):
-        payload = {"test_cases": payload}
-    if not isinstance(payload, dict):
-        return None
-
-    raw_cases = _first_present(payload, ("test_cases", "cases", "测试用例", "样例"))
-    if not isinstance(raw_cases, list):
-        raw_cases = []
-
-    warnings = payload.get("warnings", [])
-    if isinstance(warnings, str):
-        warnings = [warnings]
-    elif not isinstance(warnings, list):
-        warnings = []
-
-    return {
-        "test_cases": _normalize_case_items(raw_cases, default_source=default_source),
-        "warnings": [str(item) for item in warnings],
-    }
-
-
-def _normalize_case_items(raw_cases: list[Any], default_source: str) -> list[dict[str, str]]:
-    cases: list[dict[str, str]] = []
-    for index, item in enumerate(raw_cases, start=1):
-        if not isinstance(item, dict):
-            continue
-
-        stdin = str(_first_present(item, ("stdin", "input", "输入")) or "")
-        expected_output = str(_first_present(item, ("expected_output", "expected", "output", "输出")) or "")
-        stdin = _normalize_case_text(stdin)
-        expected_output = _strip_explanation_tail(_normalize_case_text(expected_output))
-
-        if not stdin and not expected_output:
-            continue
-
-        name = str(_first_present(item, ("name", "名称")) or f"示例 {index}")
-        source = str(_first_present(item, ("source", "来源")) or default_source)
-        cases.append(
-            {
-                "name": name,
-                "source": source,
-                "stdin": stdin,
-                "expected_output": expected_output,
-            }
-        )
-    return cases
-
-
-def _extract_cases_from_json_text(text: str) -> list[dict[str, str]]:
-    payload = _normalize_llm_test_case_payload(text)
-    if not payload:
-        return []
-    cases = payload.get("test_cases", [])
-    return cases if isinstance(cases, list) else []
-
-
-def _parse_user_cases(text: str) -> list[dict[str, str]]:
-    payload = _normalize_llm_test_case_payload(text, default_source="用户")
-    if payload is not None:
-        return _set_case_source(payload.get("test_cases", []), "用户")
-    return _set_case_source(_parse_user_cases_text(text), "用户")
-
-
-def _parse_user_cases_text(text: str) -> list[dict[str, str]]:
-    cases: list[dict[str, str]] = []
-    current = {"name": "", "source": "用户", "stdin": "", "expected_output": ""}
-    current_key = ""
-
-    for line in text.replace("\r\n", "\n").replace("\r", "\n").splitlines():
-        heading_key, inline_value = _parse_case_heading(line)
-        if heading_key == "stdin":
-            if current["stdin"] or current["expected_output"]:
-                cases.append(current)
-                current = {"name": "", "source": "用户", "stdin": "", "expected_output": ""}
-            current_key = "stdin"
-            if inline_value:
-                current[current_key] = _append_text(current[current_key], inline_value)
-            continue
-        if heading_key == "expected_output":
-            current_key = "expected_output"
-            if inline_value:
-                current[current_key] = _append_text(current[current_key], inline_value)
-            continue
-        if line.strip() in {"---", "==="}:
-            if current["stdin"] or current["expected_output"]:
-                cases.append(current)
-            current = {"name": "", "source": "用户", "stdin": "", "expected_output": ""}
-            current_key = ""
-            continue
-        if current_key:
-            current[current_key] = _append_text(current[current_key], line)
-
-    if current["stdin"] or current["expected_output"]:
-        cases.append(current)
-
-    normalized_cases = []
-    for index, item in enumerate(cases, start=1):
-        stdin = _normalize_case_text(item.get("stdin", ""))
-        expected_output = _strip_explanation_tail(_normalize_case_text(item.get("expected_output", "")))
-        if stdin and expected_output:
-            normalized_cases.append(
-                {
-                    "name": item.get("name") or f"用户用例 {index}",
-                    "source": "用户",
-                    "stdin": stdin,
-                    "expected_output": expected_output,
-                }
-            )
-    return normalized_cases
-
-
-def _parse_case_heading(line: str) -> tuple[str, str]:
-    stripped = line.strip().strip("#").strip()
-    if "：" in stripped:
-        raw_heading, inline_value = stripped.split("：", 1)
-    elif ":" in stripped:
-        raw_heading, inline_value = stripped.split(":", 1)
-    else:
-        raw_heading, inline_value = stripped, ""
-
-    heading = raw_heading.strip().lower()
-    if heading in {"输入", "stdin", "input"}:
-        return "stdin", inline_value.strip()
-    if heading in {"输出", "expected", "expected_output", "output"}:
-        return "expected_output", inline_value.strip()
-    return "", ""
-
-
-def _append_text(existing: str, line: str) -> str:
-    if not existing:
-        return line
-    return f"{existing}\n{line}"
-
-
-def _extract_problem_test_cases_from_analysis(state: OJCoachState) -> bool:
-    try:
-        payload = json.loads(state.analysis_result)
-    except json.JSONDecodeError:
-        return False
-
-    raw_cases = payload.get("测试用例", [])
-    if not isinstance(raw_cases, list):
-        return False
-
-    problem_cases = _set_case_source(_normalize_case_items(raw_cases, default_source="题目"), "题目")
-    _replace_cases_by_source(state, "题目", problem_cases)
-    sample_count = _count_cases(problem_cases)
-    if sample_count:
-        print(f"已从规则分析结果补充 {sample_count} 组题目样例。")
-    return sample_count > 0
-
-
-def _replace_cases_by_source(state: OJCoachState, source: str, replacement_cases: list[dict[str, str]]) -> None:
-    existing_cases = _extract_cases_from_json_text(state.test_cases)
-    kept_cases = [case for case in existing_cases if case.get("source") != source]
-    state.test_cases = _serialize_cases(kept_cases + _set_case_source(replacement_cases, source))
-
-
-def _set_case_source(cases: list[dict[str, str]], source: str) -> list[dict[str, str]]:
-    normalized_cases = []
-    for index, case in enumerate(cases, start=1):
-        stdin = _normalize_case_text(str(case.get("stdin", "")))
-        expected_output = _strip_explanation_tail(_normalize_case_text(str(case.get("expected_output", ""))))
-        if not stdin or not expected_output:
-            continue
-        normalized_cases.append(
-            {
-                "name": str(case.get("name") or f"{source}用例 {index}"),
-                "source": source,
-                "stdin": stdin,
-                "expected_output": expected_output,
-            }
-        )
-    return normalized_cases
-
-
-def _serialize_cases(cases: list[dict[str, str]]) -> str:
-    normalized_cases = [case for case in cases if case.get("stdin", "").strip() and case.get("expected_output", "").strip()]
-    if not normalized_cases:
-        return ""
-    return json.dumps({"test_cases": normalized_cases}, ensure_ascii=False, indent=2)
-
-
-def _count_cases(cases: list[dict[str, str]]) -> int:
-    return sum(1 for case in cases if case.get("stdin", "").strip() and case.get("expected_output", "").strip())
-
-
-def _extract_json_text(raw_result: str) -> str:
-    text = raw_result.strip()
-    if not text:
-        return ""
-
-    fenced_start = text.find("```")
-    if fenced_start != -1:
-        fenced_end = text.rfind("```")
-        if fenced_end > fenced_start:
-            inner = text[fenced_start + 3 : fenced_end].strip()
-            if inner.lower().startswith("json"):
-                inner = inner[4:].strip()
-            text = inner
-
-    object_start = text.find("{")
-    object_end = text.rfind("}")
-    if object_start != -1 and object_end != -1 and object_start < object_end:
-        return text[object_start : object_end + 1]
-
-    array_start = text.find("[")
-    array_end = text.rfind("]")
-    if array_start != -1 and array_end != -1 and array_start < array_end:
-        return text[array_start : array_end + 1]
-    return ""
-
-
-def _first_present(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:
-    for key in keys:
-        if key in payload:
-            return payload[key]
-    return None
-
-
-def _normalize_case_text(text: str) -> str:
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    return "\n".join(line.rstrip() for line in lines)
-
-
-def _strip_explanation_tail(text: str) -> str:
-    explanation_headings = (
-        "解释",
-        "说明",
-        "提示",
-        "备注",
-        "约束",
-        "constraints",
-        "explanation",
-        "note",
-    )
-    kept_lines: list[str] = []
-    for line in text.splitlines():
-        heading = line.strip().strip("#* -").strip().rstrip("：:").lower()
-        if heading in explanation_headings:
-            break
-        kept_lines.append(line)
-    return _normalize_case_text("\n".join(kept_lines))
-
-
-def _count_runnable_problem_cases_from_state(state: OJCoachState) -> int:
-    return _count_runnable_cases_json(state.test_cases)
-
-
-def _count_runnable_cases_json(raw_json: str) -> int:
-    cases = _extract_cases_from_json_text(raw_json)
-    runnable_count = 0
-    for case in cases:
-        stdin = str(case.get("stdin", "")).strip()
-        expected_output = str(case.get("expected_output", "")).strip()
-        if stdin and expected_output:
-            runnable_count += 1
-    return runnable_count
-
-
-def _count_cases_by_source(raw_json: str) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for case in _extract_cases_from_json_text(raw_json):
-        if not case.get("stdin", "").strip() or not case.get("expected_output", "").strip():
-            continue
-        source = str(case.get("source") or "未知")
-        counts[source] = counts.get(source, 0) + 1
-    return counts
-
-
-def _count_runnable_problem_cases(analysis_result: str) -> int:
-    try:
-        payload = json.loads(analysis_result)
-    except json.JSONDecodeError:
-        return 0
-
-    cases = payload.get("测试用例", [])
-    if not isinstance(cases, list):
-        return 0
-
-    runnable_count = 0
-    for case in cases:
-        if not isinstance(case, dict):
-            continue
-        stdin = str(case.get("stdin", "")).strip()
-        expected_output = str(case.get("expected_output", "")).strip()
-        if stdin and expected_output:
-            runnable_count += 1
-    return runnable_count
-
-
-def _invoke_oj_tool(tools: Any, name: str, args: dict[str, Any]) -> str:
-    return tools.invoke(name, args)
-
-
-def _apply_code_payload(raw_result: str, state: OJCoachState) -> bool:
-    if _looks_like_error(raw_result):
-        print(raw_result)
-        return False
-
-    try:
-        payload = json.loads(raw_result)
-    except json.JSONDecodeError:
-        print(f"错误：读取代码结果不是 JSON：{raw_result}")
-        return False
-
-    code = str(payload.get("code", ""))
-    language = str(payload.get("language", ""))
-    if not code.strip():
-        print("错误：读取到的代码为空。")
-        return False
-
-    state.code = code
-    state.language = language
-    state.last_run_result = ""
-    print(f"已读取 {language} 代码，共 {len(state.code)} 个字符。")
-    return True
+def _print_session_messages(result: dict[str, Any]) -> None:
+    for message in result.get("messages", []):
+        print(message)
 
 
 def _print_run_result(raw_result: str) -> None:
@@ -800,13 +200,13 @@ def _print_run_result(raw_result: str) -> None:
 
     status = result.get("status", "unknown")
     print("\n运行结果：")
-    print(f"- status: {status}")
-    print(f"- time_ms: {result.get('time_ms', 0)}")
+    print(f"- 状态: {status}")
+    print(f"- 耗时: {result.get('time_ms', 0)}ms")
 
     if "case_count" in result:
         print(
-            f"- cases: {result.get('passed_count', 0)}/"
-            f"{result.get('case_count', 0)} passed"
+            f"- 用例: {result.get('passed_count', 0)}/"
+            f"{result.get('case_count', 0)} 通过"
         )
 
     explanation = _local_status_explanation(result)
@@ -850,116 +250,24 @@ def _local_status_explanation(result: dict[str, Any]) -> str:
     return ""
 
 
-def _build_question_context(question: str, state: OJCoachState) -> str:
-    return f"""\
-用户问题：
-{question}
-
-当前代码：
-{_clip(state.code)}
-
-最近一次 run_oj_code 结果：
-{_clip(state.last_run_result)}
-
-题目分析：
-{_clip(state.analysis_result)}
-"""
-
-
-def _build_run_analysis_prompt(state: OJCoachState) -> str:
-    """构建用于 LLM 解释运行结果的上下文提示词。"""
-    return f"""\
-请基于下面三部分上下文分析运行结果并给出调试建议：
-
-题目分析：
-{_clip(state.analysis_result)}
-
-当前代码：
-{_clip(state.code, limit=MAX_CONTEXT_CHARS * 2)}
-
-最近一次 run_oj_code 结果：
-{_clip(state.last_run_result)}
-
-请根据以上信息：
-1. 如果运行出错（compile_error / runtime_error / time_limit_exceeded / wrong_answer），请具体指出错误原因和修复方向
-2. 如果运行通过（accepted），可以给出代码优化建议或考察的知识点总结
-3. 不要直接给出完整代码，而是引导用户自己思考和修改
-"""
-
-
-def _llm_explain_run(state: OJCoachState, llm) -> None:
-    """使用 LLM 流式解读 /run 的运行结果。"""
-    messages = [
-        {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
-        {"role": "user", "content": _build_run_analysis_prompt(state)},
-    ]
-    try:
-        for chunk in llm.chat_stream(messages):
-            print(chunk, end="", flush=True)
-    except Exception as exc:
-        print(f"\n（LLM 解释生成失败：{exc}）")
-    print()
-
-
-def _build_summary_explanation_prompt(state: OJCoachState, summary_result: str, notes: str) -> str:
-    return f"""\
-请把下面的规则版复盘总结翻译成适合刷题者理解的自然语言讲解。
-
-要求：
-1. 先说明这题主要考察什么，以及应该抓住的关键观察。
-2. 再说明当前代码和运行状态，重点解释错误原因或通过原因。
-3. 如果有错误，只给定位思路和修改方向，不要直接给完整代码。
-4. 最后总结下次遇到类似题时的识别信号。
-5. 不要捏造运行结果；所有结论都必须来自下面的上下文。
-
-用户备注：
-{notes or "（无）"}
-
-规则版复盘总结：
-{_clip(summary_result)}
-
-最近一次真实运行结果：
-{_clip(state.last_run_result)}
-
-题目分析：
-{_clip(state.analysis_result)}
-
-当前题目：
-{_clip(state.problem_text)}
-
-当前语言：{state.language or "未设置"}
-
-当前代码：
-{_clip(state.code, limit=MAX_CONTEXT_CHARS * 2)}
-"""
-
-
-def _llm_explain_summary(state: OJCoachState, summary_result: str, notes: str, llm) -> None:
-    """使用 LLM 把规则版复盘总结解释成人话。"""
-    messages = [
-        {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
-        {"role": "user", "content": _build_summary_explanation_prompt(state, summary_result, notes)},
-    ]
-    try:
-        for chunk in llm.chat_stream(messages):
-            print(chunk, end="", flush=True)
-    except Exception as exc:
-        print(f"\n（LLM 复盘讲解生成失败：{exc}）")
-    print()
-
-
-def _print_status(state: OJCoachState) -> None:
+def _print_status(session: OJCoachSession) -> None:
+    status = session.status()
     print("当前状态：")
-    print(f"- problem_text: {_yes_no(state.problem_text)} ({len(state.problem_text)} chars)")
-    print(f"- analysis_result: {_yes_no(state.analysis_result)}")
-    print(f"- language: {state.language or '未设置'}")
-    print(f"- code: {_yes_no(state.code)} ({len(state.code)} chars)")
-    print(f"- test_cases: {_yes_no(state.test_cases)} ({_count_runnable_cases_json(state.test_cases)} runnable cases)")
-    source_counts = _count_cases_by_source(state.test_cases)
-    if source_counts:
-        print("- test_case_sources: " + ", ".join(f"{source}={count}" for source, count in source_counts.items()))
-    print(f"- last_run_result: {_yes_no(state.last_run_result)}")
-    print(f"- timeout_ms: {state.timeout_ms}")
+    print(f"- problem_text: {_yes_no_bool(status['problem_text_set'])} ({status['problem_text_chars']} chars)")
+    print(f"- analysis_result: {_yes_no_bool(status['analysis_result_set'])}")
+    print(f"- language: {status['language']}")
+    print(f"- code: {_yes_no_bool(status['code_set'])} ({status['code_chars']} chars)")
+    print(
+        f"- test_cases: {_yes_no_bool(status['test_cases_set'])} "
+        f"({status['runnable_case_count']} runnable cases)"
+    )
+    if status["test_case_sources"]:
+        print(
+            "- test_case_sources: "
+            + ", ".join(f"{source}={count}" for source, count in status["test_case_sources"].items())
+        )
+    print(f"- last_run_result: {_yes_no_bool(status['last_run_result_set'])}")
+    print(f"- timeout_ms: {status['timeout_ms']}")
 
 
 def _print_help() -> None:
@@ -1035,35 +343,15 @@ def _strip_quotes(value: str) -> str:
     return stripped
 
 
-def _looks_like_error(result: str) -> bool:
-    stripped = result.lstrip()
-    return stripped.startswith(("错误", "执行错误", "未知工具", "error", "Error", "ERROR"))
-
-
-def _try_create_llm():
-    try:
-        from llm import LLMClient
-
-        return LLMClient()
-    except Exception:
-        return None
-
-
-def _clip(text: str, limit: int = MAX_CONTEXT_CHARS) -> str:
-    if len(text) <= limit:
-        return text or "（空）"
-    return text[:limit] + f"\n...（内容过长，已截断到 {limit} 字符）"
-
-
-def _yes_no(value: str) -> str:
-    return "已设置" if value.strip() else "未设置"
-
-
 def _configure_utf8_output() -> None:
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name)
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _yes_no_bool(value: bool) -> str:
+    return "已设置" if value else "未设置"
 
 
 if __name__ == "__main__":
