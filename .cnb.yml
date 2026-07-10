@@ -3,7 +3,7 @@ $:
     - runner:
         cpus: 16
       docker:
-        image: cnbcool/default-dev-env:latest
+        build: .ide/Dockerfile
       env:
         VIRTUAL_ENV_DISABLE_PROMPT: "1"
         VIRTUAL_ENV: "/workspace/.venv"
@@ -13,19 +13,6 @@ $:
         - vscode
         - docker
       stages:
-        - name: install system toolchains
-          script: |
-            set -e
-            if command -v sudo >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends build-essential openjdk-17-jdk
-            else
-              apt-get update
-              apt-get install -y --no-install-recommends build-essential openjdk-17-jdk
-            fi
-            g++ --version
-            java -version
-            javac -version
         - name: uv sync
           script: |
             cd /workspace
