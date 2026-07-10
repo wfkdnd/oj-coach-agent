@@ -33,3 +33,6 @@ $:
             cd /workspace
             uv sync --all-packages
             uv run python -c "import tiktoken"
+
+        - name: vscode go
+          type: vscode:go
