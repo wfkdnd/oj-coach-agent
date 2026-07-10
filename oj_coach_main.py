@@ -261,7 +261,9 @@ def _cmd_run(state: OJCoachState, tools: Any) -> None:
 def _cmd_ask(args: str, state: OJCoachState) -> None:
     question = args.strip()
     if not question:
-        print("用法：/ask 为什么这个用例过不了？")
+        question = _read_multiline("请粘贴你的问题，单独输入 END 结束：").strip()
+    if not question:
+        print("问题为空，已取消。")
         return
 
     llm = _try_create_llm()
@@ -631,7 +633,7 @@ def _print_help() -> None:
   /set_cases                  粘贴额外测试用例，直到 END
   /set_timeout <ms>           设置运行超时时间
   /run                        运行当前代码
-  /ask <question>             基于当前上下文追问，需要 LLM 环境变量
+  /ask                        多行输入追问，直到 END；需要 LLM 环境变量
   /summary [notes]            生成规则版复盘总结，并交给 LLM 做人话讲解
   /status                     查看当前状态
   /exit                       退出
