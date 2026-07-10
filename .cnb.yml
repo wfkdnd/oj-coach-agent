@@ -7,8 +7,9 @@ $:
       env:
         VIRTUAL_ENV_DISABLE_PROMPT: "1"
         VIRTUAL_ENV: "/workspace/.venv"
-        JAVA_HOME: "/usr/lib/jvm/default-java"
-        PATH: "/workspace/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        JAVA_HOME: "/usr/lib/jvm/java-17-openjdk-amd64"
+        PATH: "/workspace/.local/bin:/workspace/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        CNB_WELCOME_CMD: "cd /workspace && bash .cnb/setup-dev-tools.sh"
       services:
         - vscode
         - docker
@@ -16,19 +17,7 @@ $:
         - name: install system toolchains
           script: |
             cd /workspace
-            set -e
-            if command -v sudo >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends build-essential default-jdk python3 python3-pip python3-venv python-is-python3
-            else
-              apt-get update
-              apt-get install -y --no-install-recommends build-essential default-jdk python3 python3-pip python3-venv python-is-python3
-            fi
-            python --version
-            python3 --version
-            g++ --version
-            java -version
-            javac -version
+            bash .cnb/setup-dev-tools.sh
         - name: uv sync
           script: |
             cd /workspace
