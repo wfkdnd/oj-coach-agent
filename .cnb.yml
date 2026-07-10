@@ -1,20 +1,14 @@
-# ---- 作业验证流水线（从 CI 仓库引入） ----
-include:
-  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter1.yml
-  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter2.yml
-  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter3.yml
-  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter5.yml
-  - https://cnb.cool/xidian/vibe-coding-learning/vibe-agent-course-ci/-/blob/main/chapter6.yml
-
 $:
   vscode:
     - runner:
         cpus: 16
       docker:
         image: docker.cnb.cool/looc/default-dev-env:latest
+        build: .ide/Dockerfile
       env:
         VIRTUAL_ENV_DISABLE_PROMPT: "1"
         VIRTUAL_ENV: "/workspace/.venv"
+        JAVA_HOME: "/usr/lib/jvm/java-17-openjdk-amd64"
         PATH: "/workspace/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       services:
         - vscode
@@ -25,3 +19,7 @@ $:
             cd /workspace
             uv sync --all-packages
             uv run python -c "import tiktoken"
+            python3 --version
+            g++ --version
+            java -version
+            javac -version
