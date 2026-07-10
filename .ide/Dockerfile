@@ -2,8 +2,6 @@ FROM cnbcool/default-dev-env:latest
 
 USER root
 
-RUN echo "CUSTOM_DOCKERFILE_BUILD_MARKER"
-
 ENV DEBIAN_FRONTEND=noninteractive
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV LANG=C.UTF-8
