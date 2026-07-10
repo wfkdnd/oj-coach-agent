@@ -8,16 +8,24 @@ $:
         VIRTUAL_ENV_DISABLE_PROMPT: "1"
         VIRTUAL_ENV: "/workspace/.venv"
         JAVA_HOME: "/usr/lib/jvm/java-17-openjdk-amd64"
-        PATH: "/workspace/.local/bin:/workspace/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        CNB_WELCOME_CMD: "cd /workspace && bash .cnb/setup-dev-tools.sh"
+        PATH: "/workspace/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       services:
         - vscode
         - docker
       stages:
         - name: install system toolchains
           script: |
-            cd /workspace
-            bash .cnb/setup-dev-tools.sh
+            set -e
+            if command -v sudo >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends build-essential openjdk-17-jdk
+            else
+              apt-get update
+              apt-get install -y --no-install-recommends build-essential openjdk-17-jdk
+            fi
+            g++ --version
+            java -version
+            javac -version
         - name: uv sync
           script: |
             cd /workspace
