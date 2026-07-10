@@ -20,6 +20,14 @@ $:
         - vscode
         - docker
       stages:
+        - name: setup java and cpp
+          script: |
+            set -e
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends default-jdk build-essential
+            java -version
+            javac -version
+            g++ --version
         - name: uv sync
           script: |
             cd /workspace
