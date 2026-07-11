@@ -49,6 +49,22 @@ async def index():
     return HTMLResponse("<h1>OJ Coach Agent</h1><p>前端页面尚未创建。</p>")
 
 
+# ── LLM 健康检查 API ──────────────────────────────────────
+
+@app.get("/api/status/llm")
+async def check_llm_status():
+    """检查 LLM 是否可用。返回可用的模型 ID 或错误原因。"""
+    try:
+        from _env import get_base_url, get_api_key, get_model_id
+        base_url = get_base_url()
+        api_key = get_api_key()
+        model_id = get_model_id()
+    except EnvironmentError as e:
+        return {"ok": True, "llm_available": False, "reason": str(e), "model": ""}
+
+    return {"ok": True, "llm_available": True, "model": model_id, "base_url": base_url}
+
+
 # ── 会话管理 API ───────────────────────────────────────────
 
 @app.post("/api/sessions")

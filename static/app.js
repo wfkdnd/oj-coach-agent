@@ -25,6 +25,9 @@ async function initSession() {
         setBadge('sessionBadge', '连接失败', 'badge status-err');
         console.error('创建会话失败:', err);
     }
+
+    // 检查 LLM 连接状态
+    await checkLlmStatus();
 }
 
 // ── 命令发送 ────────────────────────────────────────
@@ -169,7 +172,9 @@ async function streamCommandV2(payload) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
+            let text = decoder.decode(value, { stream: true });
+            // 统一换行符：SSE 在 Windows 上可能返回 \r\n\r\n 或 \n\n
+            buffer += text.replace(/\r\n/g, '\n');
 
             while (true) {
                 const eventEnd = buffer.indexOf('\n\n');
@@ -254,6 +259,23 @@ async function submitCases() {
     }
     addSystemMsg('正在添加测试用例...');
     await normalCommand({ command: 'set_cases', args: '', input_text: text });
+}
+
+// ── LLM 状态检查 ────────────────────────────────────
+
+async function checkLlmStatus() {
+    try {
+        const res = await fetch('/api/status/llm');
+        const data = await res.json();
+        if (data.ok && data.llm_available) {
+            setBadge('llmBadge', `LLM: ${data.model}`, 'badge status-ok');
+        } else {
+            const reason = data.reason || '未配置';
+            setBadge('llmBadge', `LLM: ${reason}`, 'badge status-err');
+        }
+    } catch (err) {
+        setBadge('llmBadge', 'LLM: 检测失败', 'badge status-err');
+    }
 }
 
 // ── 状态刷新 ────────────────────────────────────────
@@ -546,6 +568,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 定时刷新状态
     setInterval(refreshStatus, 5000);
+    setInterval(checkLlmStatus, 30000);
 
     console.log('OJ Coach Agent WebUI 已就绪');
 });
