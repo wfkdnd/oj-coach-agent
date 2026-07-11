@@ -11,9 +11,16 @@ dependencies = [
     "tiktoken>=0.7.0",
     "prettytable>=3.10.0",
     "numpy>=1.26.0",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.29.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sse-starlette>=2.0.0",
 ]
+
+# 命令行入口点（需 pip install -e . 或 uv pip install -e . 后可使用）
+# 使用方式：oj-coach-web 启动 WebUI，oj-coach-cli 启动 CLI
+[project.scripts]
+oj-coach-web = "server:main"
+oj-coach-cli = "oj_coach_main:main"
 
 # 根项目本身不构建为包，仅作为 workspace 容器
 [tool.uv]

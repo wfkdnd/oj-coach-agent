@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
+
+from oj_tools._shared import LANGUAGE_ALIASES, normalize_language
 
 
 SUPPORTED_CODE_EXTENSIONS = {".py", ".cpp", ".java"}
@@ -18,14 +20,6 @@ LANGUAGE_BY_EXTENSION = {
     ".py": "python",
     ".cpp": "cpp",
     ".java": "java",
-}
-LANGUAGE_ALIASES = {
-    "py": "python",
-    "python": "python",
-    "python3": "python",
-    "cpp": "cpp",
-    "c++": "cpp",
-    "java": "java",
 }
 
 
@@ -40,7 +34,7 @@ def read_code(code_text: str = "", file_path: str = "", language: str = "") -> s
     if has_text and has_file:
         return "错误：code_text 和 file_path 只能提供其中一个。"
     if has_text:
-        normalized_language = _normalize_language(language)
+        normalized_language = normalize_language(language)
         return _format_code_result(
             code=_normalize_code(code_text),
             language=normalized_language or "未知",
@@ -90,10 +84,6 @@ def _read_text_file(path: Path) -> tuple[str, str]:
         except UnicodeDecodeError as exc:
             last_error = exc
     return "", f"错误：代码文件解码失败：{path}。原因：{last_error}"
-
-
-def _normalize_language(language: str) -> str:
-    return LANGUAGE_ALIASES.get(language.strip().lower(), "")
 
 
 def _normalize_code(code: str) -> str:

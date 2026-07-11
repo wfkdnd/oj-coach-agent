@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OJ Coach Agent</title>
+    <link rel="stylesheet" href="/static/style.css?v=10">
+    <script type="importmap">
+    {
+        "imports": {
+            "@codemirror/view": "https://esm.sh/@codemirror/view@6",
+            "@codemirror/state": "https://esm.sh/@codemirror/state@6",
+            "@codemirror/language": "https://esm.sh/@codemirror/language@6",
+            "@lezer/highlight": "https://esm.sh/@lezer/highlight@1",
+            "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6",
+            "@codemirror/lang-cpp": "https://esm.sh/@codemirror/lang-cpp@6",
+            "@codemirror/lang-java": "https://esm.sh/@codemirror/lang-java@6",
+            "@codemirror/commands": "https://esm.sh/@codemirror/commands@6",
+            "@codemirror/search": "https://esm.sh/@codemirror/search@6",
+            "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6",
+            "@codemirror/lint": "https://esm.sh/@codemirror/lint@6"
+        }
+    }
+    </script>
+</head>
+<body>
+    <!-- 顶部工具栏 -->
+    <div class="toolbar" id="toolbar">
+        <span class="brand">OJ Coach</span>
+        <span class="badge" id="sessionBadge">等待连接...</span>
+        <select id="sessionSwitcher" title="切换/新建会话">
+            <option value="">当前会话</option>
+        </select>
+        <span id="connBadge" class="badge">检测中...</span>
+        <button class="btn-sm" id="reconnectBtn" style="display:none;" title="重新连接">重连</button>
+        <select id="langSelect" title="选择编程语言">
+            <option value="python">Python</option>
+            <option value="cpp">C++</option>
+            <option value="java">Java</option>
+        </select>
+        <label>超时 <input type="number" id="timeoutInput" value="3000" min="500" step="500" title="运行超时(ms)"></label>
+        <span id="runStatus" class="badge">未运行</span>
+        <span id="llmBadge" class="badge">LLM: 检测中...</span>
+        <button class="theme-toggle" id="themeToggle" title="切换明暗主题">☽</button>
+    </div>
+
+    <!-- 主工作区 -->
+    <div class="main-area" id="mainArea">
+        <!-- 左侧工作区 -->
+        <div class="workspace" id="workspace">
+            <!-- 标签栏 -->
+            <div class="workspace-tabs" id="workspaceTabs">
+                <button class="tab-btn" data-tab="problem" id="tabProblem">题目</button>
+                <button class="tab-btn active" data-tab="code" id="tabCode">代码</button>
+                <button class="tab-btn" data-tab="cases" id="tabCases">用例</button>
+            </div>
+            <!-- 题目面板 -->
+            <div class="tab-content" id="tabContent-problem">
+                <div class="panel">
+                    <div class="panel-header">
+                        <span>题目</span>
+                        <div>
+                            <button class="btn-sm btn-icon" id="lockProblemBtn" onclick="toggleProblemLock()" title="锁定题目（禁止编辑）">🔓</button>
+                            <input type="file" id="problemFileInput" accept=".txt,.md,.json,.html,.htm" style="display:none;">
+                            <button class="btn-sm" onclick="document.getElementById('problemFileInput').click()" title="上传题目文件">📂</button>
+                            <button class="btn-sm" onclick="submitProblem()">提交</button>
+                        </div>
+                    </div>
+                    <div class="panel-body" id="problemPanelBody">
+                        <div class="drop-zone" id="problemDropZone">
+                            <span class="drop-zone-icon">📄</span>
+                            <span>拖拽文件到此处上传</span>
+                            <small>.txt .md .json .html</small>
+                        </div>
+                        <textarea id="problemInput" placeholder="在此粘贴题目文本，或拖入题目文件..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <!-- 代码面板 -->
+            <div class="tab-content active" id="tabContent-code">
+                <div class="panel">
+                    <div class="panel-header">
+                        <span>代码</span>
+                        <div>
+                            <button class="btn-sm" onclick="detachTab('problem')" title="拖出题目标签或按 Ctrl+Shift+P">📤题目</button>
+                            <button class="btn-sm" onclick="detachTab('cases')" title="拖出用例标签或按 Ctrl+Shift+T">📤用例</button>
+                            <button class="btn-sm" onclick="submitCode()">提交</button>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <textarea id="codeInput" placeholder="在此编写或粘贴 OJ 代码..." spellcheck="false"></textarea>
+                    </div>
+                </div>
+            </div>
+            <!-- 测试用例面板 -->
+            <div class="tab-content" id="tabContent-cases">
+                <div class="panel">
+                    <div class="panel-header">
+                        <span id="testCasePanelTitle">测试用例</span>
+                        <div>
+                            <button class="btn-sm" onclick="submitCases()">提交</button>
+                        </div>
+                    </div>
+                    <div class="panel-body" id="testCasePanelBody">
+                        <div class="tc-list" id="testCaseList"></div>
+                        <button class="tc-add-btn" onclick="addTestCase()" title="手动添加测试用例">＋ 添加用例</button>
+                        <textarea id="testCaseInput" style="display:none;"></textarea>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 拖动分隔条 -->
+        <div class="resizer-h" id="hResizer" data-resize="h"></div>
+
+        <!-- 右侧对话区 -->
+        <div class="chat-area" id="chatArea">
+            <div class="chat-messages" id="chatMessages">
+                <div class="msg msg-system">
+                    <div class="msg-header">OJ Coach</div>
+                    欢迎使用 OJ Coach Agent！<br>
+                    左侧标签页输入题目/代码/用例，底部输入命令开始刷题。<br>
+                    支持命令：/run /ask /summary /status /help<br>
+                    快捷键：Enter 发送 | Shift+Enter 换行 | Ctrl+1/2/3 切换标签 | Ctrl+B 提交代码 | ↑↓ 历史
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部命令输入 -->
+    <div class="command-bar" style="position: relative;">
+        <div class="prefix">oj&gt;</div>
+        <textarea id="commandInput"
+            placeholder="/run — 运行代码 | /ask 问题 — 提问 | /summary — 复盘 | 直接输入问题也可..."
+            rows="1"
+            autofocus
+        ></textarea>
+        <button class="btn-send" id="sendBtn" onclick="sendCommand()">发送</button>
+        <div class="suggestions" id="suggestions"></div>
+    </div>
+
+    <!-- 浮动面板（从标签栏拖出，position:fixed 浮于所有内容之上） -->
+    <div class="float-panel" id="floatPanel-problem" style="display:none;">
+        <div class="float-panel-header"><span>题目</span>
+            <div>
+                <button class="float-btn" onclick="dockTab('problem')" title="收回标签栏">📥</button>
+                <button class="float-btn" onclick="closeFloatTab('problem')" title="关闭 (Esc)">✕</button>
+            </div>
+        </div>
+        <div class="float-panel-body" id="floatBody-problem"></div>
+        <div class="float-panel-resize"></div>
+    </div>
+    <div class="float-panel" id="floatPanel-cases" style="display:none;">
+        <div class="float-panel-header"><span>用例</span>
+            <div>
+                <button class="float-btn" onclick="dockTab('cases')" title="收回标签栏">📥</button>
+                <button class="float-btn" onclick="closeFloatTab('cases')" title="关闭 (Esc)">✕</button>
+            </div>
+        </div>
+        <div class="float-panel-body" id="floatBody-cases"></div>
+        <div class="float-panel-resize"></div>
+    </div>
+
+    <!-- highlight.js 语法高亮库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <!-- 静态模块（按依赖顺序加载，均为全局函数） -->
+    <script src="/static/modules/session.js"></script>
+    <script src="/static/modules/chat.js"></script>
+    <script src="/static/modules/ui.js"></script>
+    <script src="/static/modules/theme.js"></script>
+    <script src="/static/app.js"></script>
+
+    <!-- CodeMirror v6 ESM 导入（零构建步骤，CDN 加载） -->
+    <script type="module">
+        import { lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightActiveLine, keymap, EditorView } from "@codemirror/view"
+        import { Compartment, EditorState } from "@codemirror/state"
+        import { foldGutter, indentOnInput, syntaxHighlighting, HighlightStyle, defaultHighlightStyle, bracketMatching, foldKeymap } from "@codemirror/language"
+        import { history, defaultKeymap, historyKeymap } from "@codemirror/commands"
+        import { highlightSelectionMatches, searchKeymap } from "@codemirror/search"
+        import { closeBrackets, autocompletion, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete"
+        import { lintKeymap } from "@codemirror/lint"
+        import { tags } from "@lezer/highlight"
+        import { python } from "@codemirror/lang-python"
+        import { cpp } from "@codemirror/lang-cpp"
+        import { java } from "@codemirror/lang-java"
+
+        // 手动构建 basicSetup，避免 codemirror 聚合包引入重复依赖实例
+        const basicSetup = [
+            lineNumbers(),
+            highlightActiveLineGutter(),
+            highlightSpecialChars(),
+            history(),
+            foldGutter(),
+            drawSelection(),
+            dropCursor(),
+            EditorState.allowMultipleSelections.of(true),
+            indentOnInput(),
+            syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+            bracketMatching(),
+            closeBrackets(),
+            autocompletion(),
+            rectangularSelection(),
+            crosshairCursor(),
+            highlightActiveLine(),
+            highlightSelectionMatches(),
+            keymap.of([
+                ...closeBracketsKeymap,
+                ...defaultKeymap,
+                ...searchKeymap,
+                ...historyKeymap,
+                ...foldKeymap,
+                ...completionKeymap,
+                ...lintKeymap
+            ])
+        ];
+
+        // 暴露 CodeMirror 核心给 lock 等全局方法使用
+        window.__cmImports = { EditorView, Compartment };
+
+        // 与对话框 highlight.js 保持一致的 VS Code Dark+/Light+ 配色
+        const ojCoachHighlight = HighlightStyle.define([
+            { tag: tags.keyword, class: "tok-keyword" },
+            { tag: tags.controlKeyword, class: "tok-keyword" },
+            { tag: tags.definitionKeyword, class: "tok-keyword" },
+            { tag: tags.operatorKeyword, class: "tok-keyword" },
+            { tag: tags.string, class: "tok-string" },
+            { tag: tags.comment, class: "tok-comment" },
+            { tag: tags.number, class: "tok-number" },
+            { tag: tags.bool, class: "tok-bool" },
+            { tag: tags.function(tags.variableName), class: "tok-function" },
+            { tag: tags.typeName, class: "tok-type" },
+            { tag: tags.className, class: "tok-type" },
+            { tag: tags.variableName, class: "tok-variable" },
+            { tag: tags.propertyName, class: "tok-property" },
+            { tag: tags.operator, class: "tok-operator" },
+            { tag: tags.punctuation, class: "tok-punctuation" },
+            { tag: tags.tagName, class: "tok-tag" },
+            { tag: tags.attributeName, class: "tok-attribute" },
+            { tag: tags.attributeValue, class: "tok-string" },
+            { tag: tags.atom, class: "tok-atom" },
+            { tag: tags.meta, class: "tok-meta" },
+            { tag: tags.invalid, class: "tok-invalid" },
+            { tag: tags.emphasis, class: "tok-emphasis" },
+            { tag: tags.strong, class: "tok-strong" },
+            { tag: tags.link, class: "tok-link" },
+            { tag: tags.heading, class: "tok-heading" },
+        ]);
+
+        const langMap = { python: python(), cpp: cpp(), java: java() };
+        const editorViews = {};
+
+        function createEditor(textareaId, lang) {
+            const ta = document.getElementById(textareaId);
+            if (!ta) return;
+            const parent = ta.parentElement;
+            const initial = ta.value || '';
+            ta.style.display = 'none';
+
+            // editable compartment —— 用于运行时切换只读/可编辑
+            const editableComp = new Compartment();
+
+            const extensions = [basicSetup, syntaxHighlighting(ojCoachHighlight), editableComp.of(EditorView.editable.of(true))];
+            // 仅当语言有效时才添加语言扩展（非代码面板传 null 使用纯文本模式）
+            if (lang && langMap[lang]) {
+                extensions.push(langMap[lang]);
+            }
+            extensions.push(EditorView.theme({
+                "&": { height: "100%", fontSize: "13px" },
+                ".cm-scroller": { overflow: "auto" },
+                ".cm-content": { fontFamily: "var(--font-mono)" },
+                ".cm-gutters": { background: "var(--bg-input)", color: "var(--text-muted)", border: "none" },
+            }));
+
+            const view = new EditorView({
+                doc: initial,
+                extensions,
+                parent: parent,
+            });
+
+            view._textarea = ta;
+            view._editableCompartment = editableComp;  // 供 toggleProblemLock 使用
+            editorViews[textareaId] = view;
+            return view;
+        }
+
+        function syncEditors() {
+            for (const [id, view] of Object.entries(editorViews)) {
+                if (view._textarea) {
+                    view._textarea.value = view.state.doc.toString();
+                }
+            }
+        }
+
+        // 模块脚本是 deferred 的，此时 DOM 已解析完毕，无需 DOMContentLoaded
+        // 直接初始化可确保全局方法在 app.js 的 DOMContentLoaded 之前就绪
+        // 若 CDN 回退已触发则跳过，避免编辑器与原生 textarea 同时显示
+        if (!window.__cmFallback) {
+            createEditor('problemInput', null);
+            createEditor('codeInput', 'python');
+            // testCaseInput 由卡片 UI 管理，不创建 CodeMirror 编辑器
+        }
+
+        // 语言切换时更新代码编辑器语法高亮
+        function updateCodeLang(newLang) {
+            const editor = editorViews['codeInput'];
+            if (!editor) return;
+            // 保存当前内容到 textarea，避免切换语言时丢失代码
+            const doc = editor.state.doc.toString();
+            const ta = editor._textarea;
+            ta.value = doc;
+            editor.destroy();
+            createEditor('codeInput', newLang);
+        }
+
+        window.__editorViews = editorViews;
+        window.__syncEditors = syncEditors;
+        window.__updateCodeLang = updateCodeLang;
+
+        // ── 题目编辑器锁定/解锁 ──
+        window.__problemLocked = false;
+        window.toggleProblemLock = function() {
+            window.__problemLocked = !window.__problemLocked;
+            const editor = editorViews['problemInput'];
+            const btn = document.getElementById('lockProblemBtn');
+            if (editor && editor._editableCompartment) {
+                editor.dispatch({
+                    effects: editor._editableCompartment.reconfigure(
+                        EditorView.editable.of(!window.__problemLocked)
+                    )
+                });
+            } else if (editor) {
+                // 降级：无 compartment 时尝试直接使用 Facet.reconfigure
+                try {
+                    editor.dispatch({
+                        effects: EditorView.editable.reconfigure(
+                            EditorView.editable.of(!window.__problemLocked)
+                        )
+                    });
+                } catch(e) {
+                    console.warn('Lock toggle failed:', e);
+                }
+            }
+            if (btn) {
+                btn.textContent = window.__problemLocked ? '🔒' : '🔓';
+                btn.title = window.__problemLocked ? '解锁题目（允许编辑）' : '锁定题目（禁止编辑）';
+            }
+        };
+    </script>
+
+    <!-- CDN 回退：CodeMirror 加载超时时恢复原生 textarea
+         设置 __cmFallback 标记，防止慢速 CDN 加载后编辑器与 textarea 同时显示 -->
+    <script>
+        setTimeout(() => {
+            if (!window.__editorViews || Object.keys(window.__editorViews).length === 0) {
+                window.__cmFallback = true;
+                document.querySelectorAll('.panel-body textarea').forEach(ta => {
+                    if (ta.id !== 'testCaseInput') ta.style.display = '';
+                });
+                console.warn('CodeMirror 加载超时，已回退到原生 textarea');
+            }
+        }, 8000);
+    </script>
+</body>
+</html>

@@ -21,14 +21,15 @@ class Memory:
 
     def _get_embedding(self, text: str) -> list[float]:
         """获取文本的向量表示。"""
-        resp = self._llm.client.embeddings.create(model=os.getenv("EMBEDDING_MODEL", "hunyuan-embedding"), input=text)
-        return resp.data[0].embedding
+        return self._llm.embed(text)
 
     def _cosine_similarity(self, a: list[float], b: list[float]) -> float:
         """余弦相似度。"""
         dot = sum(a[i] * b[i] for i in range(len(a)))
         norm_a = math.sqrt(sum(a[i] ** 2 for i in range(len(a))))
         norm_b = math.sqrt(sum(b[i] ** 2 for i in range(len(b))))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
         return dot / (norm_a * norm_b)
 
     def add(self, text: str) -> None:
@@ -44,10 +45,12 @@ class Memory:
 
     def save(self, path: str) -> None:
         """持久化到 JSON 文件。"""
-        with open(path, "w") as f:
-            json.dump(self._entries, f)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self._entries, f, ensure_ascii=False)
 
     def load(self, path: str) -> None:
         """从 JSON 文件加载。"""
-        with open(path, "r") as f:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"记忆文件不存在: {path}")
+        with open(path, "r", encoding="utf-8") as f:
             self._entries = json.load(f)

@@ -11,6 +11,7 @@ import json
 from typing import Any, Callable, Iterator
 
 from oj_tools import build_oj_tools
+from oj_tools._shared import parse_case_heading, append_text
 from oj_coach.prompts import (
     OJ_COACH_SYSTEM_PROMPT,
     TEST_CASE_EXTRACT_SYSTEM_PROMPT,
@@ -208,8 +209,12 @@ class OJCoachSession:
             {"role": "user", "content": self.build_question_context(question)},
         ]
         try:
+            yielded = False
             for chunk in llm.chat_stream(messages):
                 yield chunk
+                yielded = True
+            if not yielded:
+                yield "（LLM 未返回任何内容，请检查模型是否可用或网络连接。）"
         except Exception as exc:
             yield f"\n（LLM 回答生成失败：{exc}）"
 
@@ -595,19 +600,19 @@ def _parse_user_cases_text(text: str) -> list[dict[str, str]]:
     current_key = ""
 
     for line in text.replace("\r\n", "\n").replace("\r", "\n").splitlines():
-        heading_key, inline_value = _parse_case_heading(line)
+        heading_key, inline_value = parse_case_heading(line)
         if heading_key == "stdin":
             if current["stdin"] or current["expected_output"]:
                 cases.append(current)
                 current = {"name": "", "source": "用户", "stdin": "", "expected_output": ""}
             current_key = "stdin"
             if inline_value:
-                current[current_key] = _append_text(current[current_key], inline_value)
+                current[current_key] = append_text(current[current_key], inline_value)
             continue
         if heading_key == "expected_output":
             current_key = "expected_output"
             if inline_value:
-                current[current_key] = _append_text(current[current_key], inline_value)
+                current[current_key] = append_text(current[current_key], inline_value)
             continue
         if line.strip() in {"---", "==="}:
             if current["stdin"] or current["expected_output"]:
@@ -616,7 +621,7 @@ def _parse_user_cases_text(text: str) -> list[dict[str, str]]:
             current_key = ""
             continue
         if current_key:
-            current[current_key] = _append_text(current[current_key], line)
+            current[current_key] = append_text(current[current_key], line)
 
     if current["stdin"] or current["expected_output"]:
         cases.append(current)
@@ -637,27 +642,6 @@ def _parse_user_cases_text(text: str) -> list[dict[str, str]]:
     return normalized_cases
 
 
-def _parse_case_heading(line: str) -> tuple[str, str]:
-    stripped = line.strip().strip("#").strip()
-    if "：" in stripped:
-        raw_heading, inline_value = stripped.split("：", 1)
-    elif ":" in stripped:
-        raw_heading, inline_value = stripped.split(":", 1)
-    else:
-        raw_heading, inline_value = stripped, ""
-
-    heading = raw_heading.strip().lower()
-    if heading in {"输入", "stdin", "input"}:
-        return "stdin", inline_value.strip()
-    if heading in {"输出", "expected", "expected_output", "output"}:
-        return "expected_output", inline_value.strip()
-    return "", ""
-
-
-def _append_text(existing: str, line: str) -> str:
-    if not existing:
-        return line
-    return f"{existing}\n{line}"
 
 
 def _replace_source(cases: list[dict[str, str]], source: str) -> list[dict[str, str]]:
