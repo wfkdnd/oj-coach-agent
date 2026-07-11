@@ -92,6 +92,23 @@ def test_event_log_does_not_store_full_input_text():
     assert PYTHON_AC_CODE not in events_text
 
 
+def test_context_state_and_manual_compress_are_available():
+    store = _make_store(auto_run=False)
+    session_id = store.create_session()["session_id"]
+
+    store.execute_command(
+        session_id,
+        ApiCommandRequest(command="paste_problem", input_text=PROBLEM),
+    )
+    context_before = store.context_state(session_id)
+    context_after = store.compress_context(session_id)
+
+    assert context_before["snapshot"]["is_empty"] is True
+    assert context_after["snapshot"]["is_empty"] is False
+    assert "A+B" in context_after["snapshot"]["problem_summary"]
+    assert context_after["event_count"] >= context_after["snapshot"]["source_event_count"]
+
+
 def test_stream_response_is_serialized_without_generator_object():
     store = _make_store()
     session_id = store.create_session()["session_id"]

@@ -19,6 +19,7 @@ from oj_coach.commands import (
     OJCoachCommandRouter,
     parse_command_line,
 )
+from oj_coach.context import ContextCompressor, ContextSnapshot, SessionEvent
 from oj_coach.session import OJCoachSession
 
 
@@ -40,32 +41,14 @@ class ApiCommandRequest:
 
 
 @dataclass
-class SessionEvent:
-    """本地内存事件日志。
-
-    这里默认只记录命令元信息，不记录完整题目、代码或测试用例文本，后续上下文
-    压缩可以从 `OJCoachSession` 的当前状态读取必要内容。
-    """
-
-    type: str
-    payload: dict[str, Any]
-    created_at: str = field(default_factory=lambda: _now_iso())
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "type": self.type,
-            "payload": self.payload,
-            "created_at": self.created_at,
-        }
-
-
-@dataclass
 class ApiSessionRecord:
     session_id: str
     router: OJCoachCommandRouter
     created_at: str = field(default_factory=lambda: _now_iso())
     updated_at: str = field(default_factory=lambda: _now_iso())
     events: list[SessionEvent] = field(default_factory=list)
+    snapshot: ContextSnapshot = field(default_factory=ContextSnapshot)
+    compressor: ContextCompressor = field(default_factory=ContextCompressor)
 
     @property
     def coach_session(self) -> OJCoachSession:
@@ -110,6 +93,7 @@ class LocalSessionStore:
             "created_at": record.created_at,
             "updated_at": record.updated_at,
             "event_count": len(record.events),
+            "context": self.context_state(session_id),
             "status": record.coach_session.status(),
         }
 
@@ -117,6 +101,35 @@ class LocalSessionStore:
         record = self._get_record(session_id)
         safe_limit = max(1, int(limit))
         return [event.to_dict() for event in record.events[-safe_limit:]]
+
+    def context_state(self, session_id: str) -> dict[str, Any]:
+        record = self._get_record(session_id)
+        return {
+            "session_id": session_id,
+            "event_count": len(record.events),
+            "should_compress": record.compressor.should_compress(
+                record.events,
+                record.coach_session.state,
+            ),
+            "snapshot": record.snapshot.to_dict(),
+        }
+
+    def compress_context(self, session_id: str, force: bool = True) -> dict[str, Any]:
+        record = self._get_record(session_id)
+        snapshot = record.compressor.compress(
+            session_state=record.coach_session.state,
+            events=record.events,
+            force=force,
+        )
+        record.snapshot = snapshot
+        record.add_event(
+            "context_compressed",
+            {
+                "source_event_count": snapshot.source_event_count,
+                "compression_mode": snapshot.compression_mode,
+            },
+        )
+        return self.context_state(session_id)
 
     def execute_command(
         self,
@@ -259,6 +272,16 @@ def create_app(store: LocalSessionStore | None = None):
             "events": get_store().recent_events(session_id, limit=limit),
         }
 
+    @app.get("/api/sessions/{session_id}/context")
+    def get_context(session_id: str) -> dict[str, Any]:
+        get_or_404(session_id)
+        return get_store().context_state(session_id)
+
+    @app.post("/api/sessions/{session_id}/context/compress")
+    def compress_context(session_id: str) -> dict[str, Any]:
+        get_or_404(session_id)
+        return get_store().compress_context(session_id, force=True)
+
     @app.post("/api/sessions/{session_id}/command")
     def execute_command(session_id: str, body: CommandBody) -> dict[str, Any]:
         get_or_404(session_id)
@@ -315,7 +338,7 @@ def _command_event_payload(
 ) -> dict[str, Any]:
     return {
         "command": command,
-        "args": args,
+        "args_chars": len(args),
         "used_raw": bool(request.raw.strip()),
         "input_chars": len(request.input_text or ""),
         "ok": response.ok,
