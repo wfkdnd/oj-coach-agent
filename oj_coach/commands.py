@@ -16,6 +16,7 @@ from oj_coach.session import OJCoachSession
 
 END_MARKER = "END"
 EXIT_COMMANDS = {"exit", "quit"}
+COMPRESSION_COMMANDS = {"压缩", "compress", "compact"}
 
 
 class CommandParseError(ValueError):
@@ -108,6 +109,11 @@ class OJCoachCommandRouter:
             return self._execute_ask(args, input_text)
         if command == "summary":
             return self._execute_summary(args)
+        if command in COMPRESSION_COMMANDS:
+            return CommandResponse(
+                False,
+                output="当前 CLI 没有接入上下文压缩器。请在前端或本地 API 中使用 /压缩。",
+            )
         return CommandResponse(False, output=f"未知命令：/{command}。可用 /help 查看帮助。")
 
     def _execute_set_timeout(self, args: str) -> CommandResponse:
@@ -336,6 +342,7 @@ HELP_TEXT = """\
   /run                        运行当前代码
   /ask                        多行输入追问，直到 END；需要 LLM 环境变量
   /summary [notes]            生成规则版复盘总结，并交给 LLM 做人话讲解
+  /压缩                       在前端/API 中手动压缩当前会话上下文
   /status                     查看当前状态
   /exit                       退出
 

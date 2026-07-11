@@ -109,6 +109,60 @@ def test_context_state_and_manual_compress_are_available():
     assert context_after["event_count"] >= context_after["snapshot"]["source_event_count"]
 
 
+def test_compress_command_generates_context_snapshot():
+    store = _make_store(auto_run=False)
+    session_id = store.create_session()["session_id"]
+
+    store.execute_command(
+        session_id,
+        ApiCommandRequest(command="paste_problem", input_text=PROBLEM),
+    )
+    response = store.execute_command(session_id, ApiCommandRequest(raw="/压缩"))
+    context = response.data["context"]
+
+    assert response.ok is True
+    assert "已压缩" in response.messages[0]
+    assert "上下文压缩完成" in response.output
+    assert context["snapshot"]["is_empty"] is False
+    assert "A+B" in context["snapshot"]["problem_summary"]
+
+
+def test_ask_auto_compresses_before_llm_call_when_context_is_large():
+    store = _make_store(auto_run=False)
+    session_id = store.create_session()["session_id"]
+
+    store.execute_command(
+        session_id,
+        ApiCommandRequest(command="paste_problem", input_text="# 大题\n" + "很长的题面" * 4000),
+    )
+    response = store.execute_command(session_id, ApiCommandRequest(command="ask", args="这题怎么想"))
+    context = store.context_state(session_id)
+    events_text = str(store.recent_events(session_id, limit=20))
+
+    assert response.stream is not None
+    assert context["snapshot"]["is_empty"] is False
+    assert "context_auto_compressed" in events_text
+    assert context["events_since_last_compress"] >= 1
+
+
+def test_context_provider_uses_snapshot_after_compress():
+    store = _make_store(auto_run=False)
+    session_id = store.create_session()["session_id"]
+
+    store.execute_command(
+        session_id,
+        ApiCommandRequest(command="paste_problem", input_text=PROBLEM),
+    )
+    store.compress_context(session_id)
+    record = store._get_record(session_id)
+
+    context = record.coach_session.build_question_context("这题怎么想？")
+
+    assert "上下文快照" in context
+    assert "这题怎么想？" in context
+    assert "A+B" in context
+
+
 def test_stream_response_is_serialized_without_generator_object():
     store = _make_store()
     session_id = store.create_session()["session_id"]

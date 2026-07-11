@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 from oj_coach.commands import (
+    COMPRESSION_COMMANDS,
     CommandParseError,
     CommandResponse,
     EXIT_COMMANDS,
@@ -24,6 +25,7 @@ from oj_coach.session import OJCoachSession
 
 
 LOCAL_API_TITLE = "OJ Coach Local API"
+AUTO_COMPRESS_MIN_NEW_EVENTS = 10
 
 
 class SessionNotFoundError(KeyError):
@@ -58,6 +60,18 @@ class ApiSessionRecord:
         self.events.append(SessionEvent(event_type, _jsonable(payload)))
         self.updated_at = _now_iso()
 
+    def bind_context_provider(self) -> None:
+        self.coach_session.context_provider = self.build_question_context
+
+    def build_question_context(self, question: str) -> str:
+        if self.snapshot.is_empty:
+            return ""
+        return self.compressor.build_llm_context(
+            snapshot=self.snapshot,
+            session_state=self.coach_session.state,
+            question=question,
+        )
+
 
 class LocalSessionStore:
     """本地内存 session 仓库。
@@ -79,6 +93,7 @@ class LocalSessionStore:
             session_id=session_id,
             router=OJCoachCommandRouter(self._session_factory()),
         )
+        record.bind_context_provider()
         record.add_event("session_created", {"session_id": session_id})
         self._records[session_id] = record
         return self.describe_session(session_id)
@@ -107,6 +122,7 @@ class LocalSessionStore:
         return {
             "session_id": session_id,
             "event_count": len(record.events),
+            "events_since_last_compress": _events_since_last_compress(record),
             "should_compress": record.compressor.should_compress(
                 record.events,
                 record.coach_session.state,
@@ -131,6 +147,30 @@ class LocalSessionStore:
         )
         return self.context_state(session_id)
 
+    def maybe_auto_compress_context(self, record: ApiSessionRecord) -> bool:
+        if not _should_auto_compress(record):
+            return False
+
+        try:
+            snapshot = record.compressor.compress(
+                session_state=record.coach_session.state,
+                events=record.events,
+                force=False,
+            )
+        except Exception as exc:
+            record.add_event("context_compress_failed", {"error": str(exc)})
+            return False
+
+        record.snapshot = snapshot
+        record.add_event(
+            "context_auto_compressed",
+            {
+                "source_event_count": snapshot.source_event_count,
+                "compression_mode": snapshot.compression_mode,
+            },
+        )
+        return True
+
     def execute_command(
         self,
         session_id: str,
@@ -152,6 +192,18 @@ class LocalSessionStore:
             )
             record.add_event("command_rejected", _command_event_payload(request, command, args, response))
             return response
+
+        if command in COMPRESSION_COMMANDS:
+            context = self.compress_context(session_id, force=True)
+            return CommandResponse(
+                True,
+                messages=["已压缩当前会话上下文。"],
+                output=_render_context_snapshot(context),
+                data={"context": context},
+            )
+
+        if command == "ask":
+            self.maybe_auto_compress_context(record)
 
         response = record.router.execute(command, args, input_text=request.input_text)
         record.add_event("command_executed", _command_event_payload(request, command, args, response))
@@ -346,6 +398,45 @@ def _command_event_payload(
         "output_chars": len(response.output),
         "has_stream": response.stream is not None,
     }
+
+
+def _should_auto_compress(record: ApiSessionRecord) -> bool:
+    if record.snapshot.is_empty:
+        return record.compressor.should_compress(record.events, record.coach_session.state)
+
+    if _events_since_last_compress(record) < AUTO_COMPRESS_MIN_NEW_EVENTS:
+        return False
+    return record.compressor.should_compress(record.events, record.coach_session.state)
+
+
+def _events_since_last_compress(record: ApiSessionRecord) -> int:
+    if record.snapshot.is_empty:
+        return len(record.events)
+    return max(0, len(record.events) - record.snapshot.source_event_count)
+
+
+def _render_context_snapshot(context: dict[str, Any]) -> str:
+    snapshot = context.get("snapshot", {})
+    if snapshot.get("is_empty"):
+        return "当前没有可压缩的上下文。"
+
+    lines = [
+        "上下文压缩完成：",
+        f"- 事件数：{context.get('event_count', 0)}",
+        f"- 快照来源事件数：{snapshot.get('source_event_count', 0)}",
+        f"- 压缩模式：{snapshot.get('compression_mode', '')}",
+    ]
+    for key, label in (
+        ("problem_summary", "题目摘要"),
+        ("code_summary", "代码摘要"),
+        ("test_case_summary", "测试用例摘要"),
+        ("run_summary", "运行摘要"),
+        ("conversation_summary", "对话摘要"),
+    ):
+        value = str(snapshot.get(key) or "").strip()
+        if value:
+            lines.append(f"- {label}：{value}")
+    return "\n".join(lines)
 
 
 def _jsonable(value: Any) -> Any:

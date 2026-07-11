@@ -88,3 +88,25 @@ def test_ask_reports_missing_llm():
 
     assert result["ok"] is False
     assert any("LLM" in message for message in result["messages"])
+
+
+def test_build_question_context_uses_context_provider_when_available():
+    session = OJCoachSession(
+        llm_factory=lambda: None,
+        context_provider=lambda question: f"压缩上下文：{question}",
+    )
+
+    assert session.build_question_context("这题怎么想？") == "压缩上下文：这题怎么想？"
+
+
+def test_build_question_context_falls_back_when_context_provider_empty():
+    session = OJCoachSession(
+        llm_factory=lambda: None,
+        context_provider=lambda question: "",
+    )
+    session.state.code = "print(1)"
+
+    context = session.build_question_context("这题怎么想？")
+
+    assert "用户问题" in context
+    assert "print(1)" in context

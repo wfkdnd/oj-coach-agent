@@ -40,12 +40,14 @@ class OJCoachSession:
         self,
         tools: Any | None = None,
         llm_factory: Callable[[], Any | None] | None = None,
+        context_provider: Callable[[str], str] | None = None,
         auto_extract_with_llm: bool = True,
         auto_run: bool = True,
     ):
         self.state = OJCoachState()
         self.tools = tools or build_oj_tools()
         self.llm_factory = llm_factory or _default_llm_factory
+        self.context_provider = context_provider
         self.auto_extract_with_llm = auto_extract_with_llm
         self.auto_run = auto_run
 
@@ -279,6 +281,14 @@ class OJCoachSession:
             return f"（LLM 复盘讲解生成失败：{exc}）"
 
     def build_question_context(self, question: str) -> str:
+        if self.context_provider is not None:
+            try:
+                provided_context = self.context_provider(question)
+            except Exception:
+                provided_context = ""
+            if provided_context.strip():
+                return provided_context
+
         return f"""\
 用户问题：
 {question}
