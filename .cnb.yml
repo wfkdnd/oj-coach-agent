@@ -34,5 +34,12 @@ $:
             uv sync --all-packages
             uv run python -c "import tiktoken"
 
+        - name: install python api deps
+          script: |
+            set -e
+            cd /workspace
+            uv pip install --python /workspace/.venv/bin/python -r requirements.txt
+            uv run python -c "import fastapi, uvicorn; print('fastapi', fastapi.__version__); print('uvicorn', uvicorn.__version__)"
+
         - name: vscode go
           type: vscode:go
