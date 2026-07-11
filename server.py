@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -20,21 +23,64 @@ from oj_coach.commands import CommandParseError, CommandResponse
 
 # ── 应用初始化 ──────────────────────────────────────────────
 
-app = FastAPI(title="OJ Coach Agent", version="0.2.0")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """启动时注册会话过期清理，关闭时取消后台任务。"""
+    cleanup_task = asyncio.create_task(_cleanup_expired_sessions())
+    yield
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(title="OJ Coach Agent", version="0.2.0", lifespan=_lifespan)
 
 # 静态文件目录（前端三件套）
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
+# 会话过期时间（秒），30 分钟无活动自动清理
+SESSION_TTL_SECONDS = 30 * 60
+
 # 内存会话管理：session_id -> OJCoachCommandRouter
 sessions: dict[str, OJCoachCommandRouter] = {}
 
+# 会话最后访问时间：session_id -> float (timestamp)
+_session_last_access: dict[str, float] = {}
+
+# SSE 流式结果缓存：session_id -> {"result": ..., "tokens": [...]}
+# 用于断线重连时重放已执行的结果，避免二次执行命令
+_stream_cache: dict[str, dict[str, Any]] = {}
+
+
+def _touch_session(session_id: str) -> None:
+    """更新会话最后访问时间。"""
+    if session_id in sessions:
+        _session_last_access[session_id] = time.time()
+
+
+async def _cleanup_expired_sessions() -> None:
+    """后台任务：定期清理过期会话。"""
+    while True:
+        await asyncio.sleep(60)  # 每分钟检查一次
+        now = time.time()
+        expired = [
+            sid for sid, ts in _session_last_access.items()
+            if now - ts > SESSION_TTL_SECONDS
+        ]
+        for sid in expired:
+            sessions.pop(sid, None)
+            _session_last_access.pop(sid, None)
+            _stream_cache.pop(sid, None)
+
 
 def _get_router(session_id: str) -> OJCoachCommandRouter:
-    """获取或抛出 404 的会话路由器。"""
+    """获取或抛出 404 的会话路由器。同时更新最后访问时间。"""
     router = sessions.get(session_id)
     if router is None:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
+    _touch_session(session_id)
     return router
 
 
@@ -74,7 +120,29 @@ async def create_session():
     session = OJCoachSession()
     router = OJCoachCommandRouter(session)
     sessions[session_id] = router
+    _touch_session(session_id)
     return {"ok": True, "session_id": session_id}
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """列出所有活跃会话。"""
+    return {
+        "ok": True,
+        "sessions": [
+            {"session_id": sid, "language": router.session.state.language or "未设置"}
+            for sid, router in sessions.items()
+        ],
+    }
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """删除指定会话。"""
+    sessions.pop(session_id, None)
+    _session_last_access.pop(session_id, None)
+    _stream_cache.pop(session_id, None)
+    return {"ok": True}
 
 
 @app.get("/api/sessions/{session_id}/status")
@@ -103,24 +171,38 @@ async def execute_command(session_id: str, payload: dict[str, Any]):
 
 @app.post("/api/sessions/{session_id}/command/stream")
 async def execute_command_stream(session_id: str, payload: dict[str, Any]):
-    """执行命令并通过 SSE 流式返回。适用于 /ask 等需要流式输出的命令。
+    """执行命令并通过 SSE 流式返回。支持断线重连（resume 模式）。
 
     普通命令也会通过 SSE 返回，但非流式命令只会发送一个结果事件。
+    客户端重连时发送 {"resume": true}，服务端会重放缓存结果而非重新执行。
     """
+    # 断线重连：回放缓存
+    if payload.get("resume"):
+        cached = _stream_cache.get(session_id)
+        if cached:
+            async def replay_cache():
+                yield {"event": "result", "data": _json_dumps(cached["result"])}
+                for chunk in cached["tokens"]:
+                    yield {"event": "token", "data": chunk}
+                yield {"event": "done", "data": ""}
+            return EventSourceResponse(replay_cache())
+
     router = _get_router(session_id)
     command, args, input_text = _parse_payload(payload)
     response = router.execute(command, args, input_text=input_text)
 
     async def event_generator():
-        # 先发送消息和输出
         base = _serialize_response(response)
         yield {"event": "result", "data": _json_dumps(base)}
 
-        # 如果有流式内容，逐 token 发送
         if response.stream is not None:
+            collected: list[str] = []
             for chunk in response.stream:
+                collected.append(chunk)
                 yield {"event": "token", "data": chunk}
             yield {"event": "done", "data": ""}
+            # 缓存结果用于断线重连
+            _stream_cache[session_id] = {"result": base, "tokens": collected}
 
     return EventSourceResponse(event_generator())
 

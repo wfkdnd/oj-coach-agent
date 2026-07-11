@@ -4,9 +4,26 @@ import subprocess
 import re
 
 DANGER_PATTERNS = [
+    # 破坏性文件操作
     r"rm\s+(-\w+\s+)*(/|~)",
+    r"rmdir\s+(-\w+\s+)*(/|~)",
+    r">\s*/dev/sd[a-z]",
+    r"dd\s+if=",
+    r"mkfs\.",
+    # 权限提升
     r"sudo\s+",
+    r"su\s+-",
+    # 远程代码执行
     r"curl\s+.*\|\s*(ba)?sh",
+    r"wget\s+.*\|\s*(ba)?sh",
+    r"curl\s+.*\|\s*python",
+    # fork bomb / 资源耗尽
+    r":\(\)\s*\{",
+    r"chmod\s+.*777",
+    # 危险系统操作
+    r"shutdown\s+",
+    r"reboot\s+",
+    r"init\s+[0-6]",
 ]
 
 

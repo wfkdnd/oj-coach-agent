@@ -17,7 +17,7 @@ def edit_file(file_path: str, old_content: str, new_content: str) -> str:
     if os.path.isdir(file_path):
         return f"❌ 不是文件: {file_path}"
     try:
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
     except Exception as e:
         return f"❌ 读取失败: {e}"
@@ -28,6 +28,6 @@ def edit_file(file_path: str, old_content: str, new_content: str) -> str:
         return f"❌ 原文不唯一: {old_content}"
     
     new_content = content.replace(old_content, new_content)
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(new_content)
     return f"✅ 替换成功: {file_path}"

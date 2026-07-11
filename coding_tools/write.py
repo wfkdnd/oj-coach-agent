@@ -17,6 +17,6 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
     dirname = os.path.dirname(file_path)
     if dirname:
         os.makedirs(dirname, exist_ok=True)
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
     return f"✅ 写入成功: {file_path}（{len(content)} 字符）"

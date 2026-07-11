@@ -23,7 +23,6 @@ from oj_coach.session import (
     _normalize_case_items,
     _parse_user_cases,
     _parse_user_cases_text,
-    _parse_case_heading,
     # 规范化 & 清理
     _normalize_case_text,
     _strip_explanation_tail,
@@ -38,11 +37,11 @@ from oj_coach.session import (
     _count_runnable_problem_cases,
     # 工具函数
     _first_present,
-    _append_text,
     _looks_like_error,
     _clip,
     _session_result,
 )
+from oj_tools._shared import parse_case_heading, append_text
 
 # ═══════════════════════════════════════════════════════════════
 # _extract_json_text — 从 LLM 回复中提取 JSON
@@ -352,38 +351,38 @@ class TestParseUserCasesText:
 
 class TestParseCaseHeading:
     def test_chinese_stdin(self):
-        key, val = _parse_case_heading("输入：1 2")
+        key, val = parse_case_heading("输入：1 2")
         assert key == "stdin"
         assert val == "1 2"
 
     def test_chinese_output(self):
-        key, val = _parse_case_heading("输出：3")
+        key, val = parse_case_heading("输出：3")
         assert key == "expected_output"
         assert val == "3"
 
     def test_english_stdin(self):
-        key, val = _parse_case_heading("stdin: 1")
+        key, val = parse_case_heading("stdin: 1")
         assert key == "stdin"
 
     def test_english_expected(self):
-        key, val = _parse_case_heading("expected_output: 2")
+        key, val = parse_case_heading("expected_output: 2")
         assert key == "expected_output"
 
     def test_non_heading(self):
-        key, val = _parse_case_heading("just text")
+        key, val = parse_case_heading("just text")
         assert key == ""
         assert val == ""
 
     def test_heading_without_colon(self):
-        key, val = _parse_case_heading("input")
-        # "input" 本身可能匹配 stdin → 取决于 _parse_case_heading 逻辑
+        key, val = parse_case_heading("input")
+        # "input" 本身可能匹配 stdin → 取决于 parse_case_heading 逻辑
         # 但 heading 是整行，没有冒号时 raw_heading="input", inline_value=""
         # heading = "input".strip().lower() = "input" → 匹配 stdin
         assert key == "stdin"
         assert val == ""
 
     def test_heading_with_hash_prefix(self):
-        key, val = _parse_case_heading("### 输入：1 2")
+        key, val = parse_case_heading("### 输入：1 2")
         assert key == "stdin"
         assert val == "1 2"
 
@@ -633,10 +632,10 @@ class TestFirstPresent:
 
 class TestAppendText:
     def test_append_to_empty(self):
-        assert _append_text("", "hello") == "hello"
+        assert append_text("", "hello") == "hello"
 
     def test_append_to_existing(self):
-        assert _append_text("line1", "line2") == "line1\nline2"
+        assert append_text("line1", "line2") == "line1\nline2"
 
 
 # ═══════════════════════════════════════════════════════════════

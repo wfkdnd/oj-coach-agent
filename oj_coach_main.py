@@ -57,8 +57,8 @@ def main() -> None:
         if not raw:
             continue
         if not raw.startswith("/"):
-            console.print("[yellow]请输入以 / 开头的命令。可用 /help 查看帮助。[/yellow]")
-            continue
+            # 非 / 开头的内容自动转为 /ask 提问
+            raw = "/ask " + raw
 
         try:
             parsed = parse_command_line(raw)
@@ -107,7 +107,7 @@ def _print_response(response: CommandResponse) -> None:
             console.print(f"\n[bold cyan]{response.stream_title}[/bold cyan]")
         console.print()  # 空行
         # 使用 Live 实现打字机效果
-        with Live(auto_refresh=False, console=console) as live:
+        with Live(auto_refresh=True, console=console) as live:
             accumulated = ""
             for chunk in response.stream:
                 accumulated += chunk

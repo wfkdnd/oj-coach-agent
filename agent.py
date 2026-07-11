@@ -83,7 +83,15 @@ class Agent:
             # 执行每个工具并追加结果
             for tc in tool_calls:
                 name = tc["function"]["name"]
-                args = json.loads(tc["function"]["arguments"])
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError as e:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": f"❌ JSON 解析失败: {e}\n原始参数: {tc['function']['arguments']}",
+                    })
+                    continue
                 result = self.tools.invoke(name, args)
                 messages.append({
                     "role": "tool",
