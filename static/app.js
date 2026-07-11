@@ -199,12 +199,18 @@ async function streamCommandV2(payload) {
                         for (const msg of (result.messages || [])) {
                             addSystemMsg(msg);
                         }
+                        if (result.output) {
+                            addResultMsg(result.output);
+                        }
                     } catch (e) {}
                 }
             }
         }
     } finally {
-        // 流式完成
+        // 流式完成：如果没有任何 token 填充，给出兜底提示
+        if (streamMsgEl && !textSpan.textContent.trim()) {
+            textSpan.textContent = '（未收到回答内容，请检查 LLM 配置或网络）';
+        }
         if (streamMsgEl) {
             streamMsgEl.className = 'msg msg-assistant';
         }

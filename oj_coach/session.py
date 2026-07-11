@@ -206,8 +206,12 @@ class OJCoachSession:
             {"role": "user", "content": self.build_question_context(question)},
         ]
         try:
+            yielded = False
             for chunk in llm.chat_stream(messages):
                 yield chunk
+                yielded = True
+            if not yielded:
+                yield "（LLM 未返回任何内容，请检查模型是否可用或网络连接。）"
         except Exception as exc:
             yield f"\n（LLM 回答生成失败：{exc}）"
 
