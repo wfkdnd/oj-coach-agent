@@ -3,7 +3,7 @@ name = "vibe-agent-course"
 version = "0.1.0"
 description = "Hello Agents 教学课程 —— 多章节 uv workspace"
 requires-python = ">=3.10"
-# 根项目自身不需要任何运行依赖
+# 根项目用于本地 OJ Coach、API 服务和课程示例的运行依赖
 dependencies = [
     "rich>=15.0.0",
     "openai>=1.0.0",
@@ -11,6 +11,8 @@ dependencies = [
     "tiktoken>=0.7.0",
     "prettytable>=3.10.0",
     "numpy>=1.26.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
 ]
 
 # 根项目本身不构建为包，仅作为 workspace 容器
