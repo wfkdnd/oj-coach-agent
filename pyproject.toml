@@ -11,6 +11,9 @@ dependencies = [
     "tiktoken>=0.7.0",
     "prettytable>=3.10.0",
     "numpy>=1.26.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sse-starlette>=2.0.0",
 ]
 
 # 根项目本身不构建为包，仅作为 workspace 容器

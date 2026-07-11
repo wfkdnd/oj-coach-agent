@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OJ Coach Agent</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- 顶部工具栏 -->
+    <div class="toolbar" id="toolbar">
+        <span class="brand">OJ Coach</span>
+        <span class="badge" id="sessionBadge">等待连接...</span>
+        <select id="langSelect" title="选择编程语言">
+            <option value="python">Python</option>
+            <option value="cpp">C++</option>
+            <option value="java">Java</option>
+        </select>
+        <label>超时 <input type="number" id="timeoutInput" value="3000" min="500" step="500" title="运行超时(ms)"></label>
+        <span id="runStatus" class="badge">未运行</span>
+    </div>
+
+    <!-- 主工作区 -->
+    <div class="main-area" id="mainArea">
+        <!-- 左侧工作区 -->
+        <div class="workspace" id="workspace">
+            <!-- 题目面板 -->
+            <div class="panel" id="problemPanel">
+                <div class="panel-header">
+                    <span>题目</span>
+                    <div>
+                        <button class="btn-sm" onclick="submitProblem()">提交</button>
+                        <button class="btn-sm" onclick="loadProblemFile()()" style="display:none">加载文件</button>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <textarea id="problemInput" placeholder="在此粘贴题目文本，或拖入题目文件..."></textarea>
+                </div>
+            </div>
+            <div class="resizer-v" data-resize="v" data-target="problemPanel" data-sibling="codePanel"></div>
+            <!-- 代码面板 -->
+            <div class="panel" id="codePanel">
+                <div class="panel-header">
+                    <span>代码</span>
+                    <div>
+                        <button class="btn-sm" onclick="submitCode()">提交</button>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <textarea id="codeInput" placeholder="在此编写或粘贴 OJ 代码..." spellcheck="false"></textarea>
+                </div>
+            </div>
+            <div class="resizer-v" data-resize="v" data-target="codePanel" data-sibling="testCasePanel"></div>
+            <!-- 测试用例面板 -->
+            <div class="panel" id="testCasePanel">
+                <div class="panel-header">
+                    <span>测试用例</span>
+                    <div>
+                        <button class="btn-sm" onclick="submitCases()">提交</button>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <textarea id="testCaseInput" placeholder='输入格式支持 JSON 或文本：
+[
+  {"stdin": "1 2", "expected_output": "3"},
+  {"stdin": "5 3", "expected_output": "8"}
+]
+或：
+输入：
+1 2
+输出：
+3
+---
+输入：
+5 3
+输出：
+8'
+"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <!-- 拖动分隔条 -->
+        <div class="resizer-h" id="hResizer" data-resize="h"></div>
+
+        <!-- 右侧对话区 -->
+        <div class="chat-area" id="chatArea">
+            <div class="chat-messages" id="chatMessages">
+                <div class="msg msg-system">
+                    <div class="msg-header">OJ Coach</div>
+                    欢迎使用 OJ Coach Agent！<br>
+                    左侧粘贴题目和代码，底部输入命令开始刷题。<br>
+                    支持命令：/run /ask /summary /status /help
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部命令输入 -->
+    <div class="command-bar" style="position: relative;">
+        <div class="prefix">oj&gt;</div>
+        <textarea id="commandInput"
+            placeholder="/run — 运行代码 | /ask 问题 — 提问 | /summary — 复盘 | 直接输入问题也可..."
+            rows="1"
+            autofocus
+        ></textarea>
+        <button class="btn-send" id="sendBtn" onclick="sendCommand()">发送</button>
+        <div class="suggestions" id="suggestions"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
