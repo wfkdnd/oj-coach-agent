@@ -40,10 +40,11 @@ TEST_CASE_EXTRACT_USER_PROMPT = """\
    }}
 3. stdin 只包含输入内容。
 4. expected_output 只包含输出内容。
-5. “解释”“说明”“提示”“约束”等内容不能混入 expected_output。
-6. 保留原始大小写、空格、换行和 true/false 这类输出格式。
-7. 如果是 LeetCode 风格的“n = 2”“nums = [...]”，请把这些输入变量逐行放入 stdin。
-8. 如果没有可提取样例，返回 {{"test_cases": [], "warnings": ["未找到样例"]}}。
+5. 如果题目没有输入，stdin 返回空字符串；只要存在样例输出，仍需保留该用例。
+6. “解释”“说明”“提示”“约束”等内容不能混入 expected_output。
+7. 保留原始大小写、空格、换行和 true/false 这类输出格式。
+8. 如果是 LeetCode 风格的“n = 2”“nums = [...]”，请把这些输入变量逐行放入 stdin。
+9. 如果没有可提取样例，返回 {{"test_cases": [], "warnings": ["未找到样例"]}}。
 
 题目文本：
 {problem_text}

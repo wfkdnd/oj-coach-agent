@@ -154,6 +154,23 @@ def test_multiple_samples():
     assert len(data["测试用例"]) == 2, "应有 2 组测试用例"
 
 
+def test_output_only_sample_stops_before_explanation():
+    problem = """## 区间覆盖
+样例输出：
+YES
+解释：
+区间 [1,2] 覆盖 1,2；
+区间 [3,4] 覆盖 3,4；
+区间 [4,5] 覆盖 5；
+因此 [1,5] 全部被覆盖。
+"""
+    cases = extract_problem_test_cases(problem)
+
+    assert len(cases) == 1
+    assert cases[0]["stdin"] == ""
+    assert cases[0]["expected_output"] == "YES"
+
+
 def test_section_aliases():
     """识别不同命名风格的段落标题"""
     result = analyze_problem(PROBLEM_WITH_SECTIONS)

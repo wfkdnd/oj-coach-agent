@@ -61,7 +61,8 @@
                         <span>题目</span>
                         <div>
                             <button class="btn-sm btn-icon" id="lockProblemBtn" onclick="toggleProblemLock()" title="锁定题目（禁止编辑）">🔓</button>
-                            <input type="file" id="problemFileInput" accept=".txt,.md,.json,.html,.htm" style="display:none;">
+                            <button class="btn-sm" id="problemPreviewBtn" onclick="toggleProblemPreview()" title="预览 Markdown 题目">预览</button>
+                            <input type="file" id="problemFileInput" accept=".txt,.md,.markdown,.json,.html,.htm" style="display:none;">
                             <button class="btn-sm" onclick="document.getElementById('problemFileInput').click()" title="上传题目文件">📂</button>
                             <button class="btn-sm" onclick="submitProblem()">提交</button>
                         </div>
@@ -70,9 +71,10 @@
                         <div class="drop-zone" id="problemDropZone">
                             <span class="drop-zone-icon">📄</span>
                             <span>拖拽文件到此处上传</span>
-                            <small>.txt .md .json .html</small>
+                            <small>.txt .md .markdown .json .html</small>
                         </div>
                         <textarea id="problemInput" placeholder="在此粘贴题目文本，或拖入题目文件..."></textarea>
+                        <div class="problem-markdown-preview" id="problemMarkdownPreview"></div>
                     </div>
                 </div>
             </div>
@@ -82,12 +84,20 @@
                     <div class="panel-header">
                         <span>代码</span>
                         <div>
+                            <button class="btn-sm btn-icon" id="lockCodeBtn" onclick="toggleCodeLock()" title="锁定代码（禁止编辑）">🔓</button>
+                            <input type="file" id="codeFileInput" accept=".py,.cpp,.cc,.cxx,.java,.txt" style="display:none;">
+                            <button class="btn-sm" onclick="document.getElementById('codeFileInput').click()" title="上传代码文件">📂</button>
                             <button class="btn-sm" onclick="detachTab('problem')" title="拖出题目标签或按 Ctrl+Shift+P">📤题目</button>
                             <button class="btn-sm" onclick="detachTab('cases')" title="拖出用例标签或按 Ctrl+Shift+T">📤用例</button>
                             <button class="btn-sm" onclick="submitCode()">提交</button>
                         </div>
                     </div>
-                    <div class="panel-body">
+                    <div class="panel-body" id="codePanelBody">
+                        <div class="drop-zone" id="codeDropZone">
+                            <span class="drop-zone-icon">📄</span>
+                            <span>拖拽代码文件到此处上传</span>
+                            <small>.py .cpp .cc .cxx .java .txt</small>
+                        </div>
                         <textarea id="codeInput" placeholder="在此编写或粘贴 OJ 代码..." spellcheck="false"></textarea>
                     </div>
                 </div>
@@ -186,13 +196,10 @@
         import { cpp } from "@codemirror/lang-cpp"
         import { java } from "@codemirror/lang-java"
 
-        // 手动构建 basicSetup，避免 codemirror 聚合包引入重复依赖实例
-        const basicSetup = [
-            lineNumbers(),
-            highlightActiveLineGutter(),
+        // 手动构建共享编辑器扩展，避免 codemirror 聚合包引入重复依赖实例
+        const sharedEditorSetup = [
             highlightSpecialChars(),
             history(),
-            foldGutter(),
             drawSelection(),
             dropCursor(),
             EditorState.allowMultipleSelections.of(true),
@@ -214,6 +221,13 @@
                 ...completionKeymap,
                 ...lintKeymap
             ])
+        ];
+
+        // 题目是阅读材料，不显示行号；代码编辑器保留行号、活动行与折叠入口。
+        const codeGutterSetup = [
+            lineNumbers(),
+            highlightActiveLineGutter(),
+            foldGutter(),
         ];
 
         // 暴露 CodeMirror 核心给 lock 等全局方法使用
@@ -250,6 +264,8 @@
 
         const langMap = { python: python(), cpp: cpp(), java: java() };
         const editorViews = {};
+        window.__problemLocked = Boolean(window.__problemLocked);
+        window.__codeLocked = Boolean(window.__codeLocked);
 
         function createEditor(textareaId, lang) {
             const ta = document.getElementById(textareaId);
@@ -260,8 +276,16 @@
 
             // editable compartment —— 用于运行时切换只读/可编辑
             const editableComp = new Compartment();
+            const locked = textareaId === 'problemInput'
+                ? window.__problemLocked
+                : window.__codeLocked;
 
-            const extensions = [basicSetup, syntaxHighlighting(ojCoachHighlight), editableComp.of(EditorView.editable.of(true))];
+            const extensions = [
+                ...(textareaId === 'codeInput' ? codeGutterSetup : []),
+                ...sharedEditorSetup,
+                syntaxHighlighting(ojCoachHighlight),
+                editableComp.of(EditorView.editable.of(!locked)),
+            ];
             // 仅当语言有效时才添加语言扩展（非代码面板传 null 使用纯文本模式）
             if (lang && langMap[lang]) {
                 extensions.push(langMap[lang]);
@@ -280,7 +304,7 @@
             });
 
             view._textarea = ta;
-            view._editableCompartment = editableComp;  // 供 toggleProblemLock 使用
+            view._editableCompartment = editableComp;  // 供题目/代码锁按钮使用
             editorViews[textareaId] = view;
             return view;
         }
@@ -318,35 +342,35 @@
         window.__syncEditors = syncEditors;
         window.__updateCodeLang = updateCodeLang;
 
-        // ── 题目编辑器锁定/解锁 ──
-        window.__problemLocked = false;
-        window.toggleProblemLock = function() {
-            window.__problemLocked = !window.__problemLocked;
-            const editor = editorViews['problemInput'];
-            const btn = document.getElementById('lockProblemBtn');
+        // ── 题目/代码编辑器锁定 ──
+        function toggleEditorLock(textareaId, stateKey, buttonId, label) {
+            window[stateKey] = !window[stateKey];
+            const editor = editorViews[textareaId];
+            const btn = document.getElementById(buttonId);
             if (editor && editor._editableCompartment) {
                 editor.dispatch({
                     effects: editor._editableCompartment.reconfigure(
-                        EditorView.editable.of(!window.__problemLocked)
+                        EditorView.editable.of(!window[stateKey])
                     )
                 });
-            } else if (editor) {
-                // 降级：无 compartment 时尝试直接使用 Facet.reconfigure
-                try {
-                    editor.dispatch({
-                        effects: EditorView.editable.reconfigure(
-                            EditorView.editable.of(!window.__problemLocked)
-                        )
-                    });
-                } catch(e) {
-                    console.warn('Lock toggle failed:', e);
-                }
+            } else {
+                const textarea = document.getElementById(textareaId);
+                if (textarea) textarea.readOnly = window[stateKey];
             }
             if (btn) {
-                btn.textContent = window.__problemLocked ? '🔒' : '🔓';
-                btn.title = window.__problemLocked ? '解锁题目（允许编辑）' : '锁定题目（禁止编辑）';
+                btn.textContent = window[stateKey] ? '🔒' : '🔓';
+                btn.title = window[stateKey]
+                    ? `解锁${label}（允许编辑）`
+                    : `锁定${label}（禁止编辑）`;
             }
-        };
+        }
+
+        window.toggleProblemLock = () => toggleEditorLock(
+            'problemInput', '__problemLocked', 'lockProblemBtn', '题目'
+        );
+        window.toggleCodeLock = () => toggleEditorLock(
+            'codeInput', '__codeLocked', 'lockCodeBtn', '代码'
+        );
     </script>
 
     <!-- CDN 回退：CodeMirror 加载超时时恢复原生 textarea

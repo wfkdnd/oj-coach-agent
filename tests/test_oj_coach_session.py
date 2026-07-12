@@ -20,6 +20,7 @@ PROBLEM = """## A+B
 """
 
 PYTHON_AC_CODE = "a, b = map(int, input().split())\nprint(a + b)"
+PYTHON_NO_INPUT_CODE = 'print("YES")'
 
 
 def _make_session(auto_run=True):
@@ -63,6 +64,20 @@ def test_add_cases_and_run_code_without_auto_run():
 
     assert add_result["ok"] is True
     assert run_result["ok"] is True
+    assert parsed["status"] == "accepted"
+    assert parsed["case_count"] == 1
+
+
+def test_output_only_case_runs_without_stdin():
+    session = _make_session(auto_run=False)
+    session.set_code(PYTHON_NO_INPUT_CODE, "python")
+
+    add_result = session.add_cases("输出：\nYES")
+    run_result = session.run_code()
+    parsed = json.loads(run_result["run_result"])
+
+    assert add_result["ok"] is True
+    assert session.status()["runnable_case_count"] == 1
     assert parsed["status"] == "accepted"
     assert parsed["case_count"] == 1
 

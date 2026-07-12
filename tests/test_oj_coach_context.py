@@ -58,6 +58,17 @@ def test_context_snapshot_summarizes_state_without_full_code():
     assert snapshot.source_event_count == 1
 
 
+def test_context_snapshot_counts_output_only_case_as_runnable():
+    state = OJCoachState(
+        test_cases='{"test_cases":[{"source":"题目","stdin":"","expected_output":"YES"}]}',
+    )
+
+    snapshot = ContextCompressor().compress(state, [])
+
+    assert "可运行测试用例：1 组" in snapshot.test_case_summary
+    assert "题目=1" in snapshot.test_case_summary
+
+
 def test_should_compress_uses_event_count_or_state_size():
     compressor = ContextCompressor(max_events_before_compress=2, max_chars_before_compress=1000)
     state = OJCoachState()

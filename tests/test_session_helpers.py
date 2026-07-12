@@ -70,13 +70,11 @@ class TestExtractJsonText:
         result = _extract_json_text(text)
         assert result == '{"test": true}'
 
-    def test_json_array_of_objects_returns_inner_object(self):
-        """已知行为：数组含 {} 时优先匹配 {}，截取到内部对象而非完整数组。"""
+    def test_json_array_of_objects_returns_complete_array(self):
+        """对象数组必须保留外层 []，不能截取成其中的对象。"""
         text = '[{"name": "t1"}, {"name": "t2"}]'
         result = _extract_json_text(text)
-        # 实际返回第一个 {}
-        assert '{' in result
-        assert '}' in result
+        assert result == text
 
     def test_json_array_with_non_objects_works(self):
         """纯数字/字符串数组能正确提取。"""
@@ -120,16 +118,15 @@ class TestNormalizeLLMTestCasePayload:
         assert len(result["test_cases"]) == 1
         assert result["test_cases"][0]["stdin"] == "1 2"
 
-    def test_flat_list_format_known_quirk(self):
-        """已知行为：_extract_json_text 在数组中优先匹配 {}，含对象的数组会被解析为内部对象。
-        此时 _normalize_llm_test_case_payload 将对象当作 dict 处理，test_cases 为空。"""
+    def test_flat_list_format(self):
+        """顶层对象数组会被规范化为 test_cases。"""
         raw = json.dumps([
             {"stdin": "5 7", "expected_output": "12"},
         ])
         result = _normalize_llm_test_case_payload(raw)
         assert result is not None
-        # 含对象的数组被 _extract_json_text 截断为内部对象，无 test_cases key
-        assert result["test_cases"] == []
+        assert len(result["test_cases"]) == 1
+        assert result["test_cases"][0]["expected_output"] == "12"
 
     def test_chinese_keys(self):
         """中文 key 的兼容性。"""
@@ -206,6 +203,12 @@ class TestNormalizeCaseItems:
         result = _normalize_case_items(raw, default_source="题目")
         assert len(result) == 0
 
+    def test_accept_output_only_case(self):
+        raw = [{"name": "no-input", "stdin": "", "expected_output": "YES"}]
+        result = _normalize_case_items(raw, default_source="题目")
+        assert len(result) == 1
+        assert result[0]["stdin"] == ""
+
     def test_default_name_and_source(self):
         """_normalize_case_items 的默认名称格式为 '示例 N'。"""
         raw = [{"stdin": "1", "expected_output": "2"}]
@@ -230,15 +233,14 @@ class TestNormalizeCaseItems:
 class TestParseUserCases:
     """测试用户输入的测试用例解析。"""
 
-    def test_json_array_format_known_quirk(self):
-        """含对象的 JSON 数组会被 _extract_json_text 截取内部对象，
-        _normalize_llm_test_case_payload 得不到 test_cases key。"""
+    def test_json_array_format(self):
+        """前端或 API 直接提交对象数组时也能正常识别。"""
         text = json.dumps([
             {"stdin": "1 2", "expected_output": "3"},
         ])
         result = _parse_user_cases(text)
-        # 已知行为：对象数组被截断为内部对象，导致 0 个用例
-        assert result == []
+        assert len(result) == 1
+        assert result[0]["expected_output"] == "3"
 
     def test_json_object_format_works(self):
         """标准 JSON 对象格式（有 test_cases key）。"""
@@ -285,6 +287,12 @@ class TestParseUserCases:
         text = "输入：\nonly input"
         result = _parse_user_cases(text)
         assert len(result) == 0
+
+    def test_output_only_case_accepted(self):
+        result = _parse_user_cases("输出：\nYES")
+        assert len(result) == 1
+        assert result[0]["stdin"] == ""
+        assert result[0]["expected_output"] == "YES"
 
     def test_colon_format(self):
         """英文冒号格式。"""
@@ -335,8 +343,14 @@ class TestParseUserCasesText:
     def test_input_only_no_output(self):
         text = "输入：\n1"
         result = _parse_user_cases_text(text)
-        # 只有输入、没有期望输出的用例不被算作可运行
+        # 只有输入、没有期望输出的用例无法校验结果。
         assert result == []
+
+    def test_output_only_without_input(self):
+        result = _parse_user_cases_text("输出：\nYES")
+        assert len(result) == 1
+        assert result[0]["stdin"] == ""
+        assert result[0]["expected_output"] == "YES"
 
     def test_case_with_auto_numbering(self):
         text = "输入：\na\n输出：\nb\n---\n输入：\nc\n输出：\nd"
@@ -488,13 +502,14 @@ class TestSetCaseSource:
         assert result[0]["stdin"] == " 1"
         assert result[0]["expected_output"] == " 2"
 
-    def test_filters_incomplete_cases(self):
+    def test_accepts_output_only_cases(self):
         cases = [
             {"stdin": "", "expected_output": "2"},
             {"stdin": "1", "expected_output": "2"},
         ]
         result = _set_case_source(cases, "题目")
-        assert len(result) == 1
+        assert len(result) == 2
+        assert result[0]["stdin"] == ""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -517,12 +532,13 @@ class TestSerializeCases:
 
     def test_filters_incomplete(self):
         cases = [
-            {"name": "bad", "source": "x", "stdin": "", "expected_output": ""},
+            {"name": "empty", "source": "x", "stdin": "", "expected_output": ""},
+            {"name": "no-input", "source": "x", "stdin": "", "expected_output": "YES"},
             {"name": "good", "source": "x", "stdin": "1", "expected_output": "2"},
         ]
         json_str = _serialize_cases(cases)
         parsed = json.loads(json_str)
-        assert len(parsed["test_cases"]) == 1
+        assert len(parsed["test_cases"]) == 2
 
 
 class TestExtractCasesFromJsonText:
@@ -550,7 +566,7 @@ class TestCountFunctions:
             {"stdin": "3", "expected_output": ""},
             {"stdin": "5", "expected_output": "6"},
         ]
-        assert _count_cases(cases) == 2  # 只有第1和第4组完整
+        assert _count_cases(cases) == 3  # 第2组无需输入，也可按期望输出校验
 
     def test_count_cases_empty(self):
         assert _count_cases([]) == 0
@@ -563,7 +579,7 @@ class TestCountFunctions:
                 {"stdin": "4", "expected_output": "5"},
             ],
         })
-        assert _count_runnable_cases_json(json_str) == 2
+        assert _count_runnable_cases_json(json_str) == 3
 
     def test_count_runnable_cases_empty_json(self):
         assert _count_runnable_cases_json("") == 0
@@ -590,7 +606,7 @@ class TestCountFunctions:
                 {"stdin": "", "expected_output": "5"},
             ],
         })
-        assert _count_runnable_problem_cases(analysis) == 2
+        assert _count_runnable_problem_cases(analysis) == 3
 
     def test_count_runnable_problem_cases_invalid_json(self):
         assert _count_runnable_problem_cases("not json") == 0

@@ -132,7 +132,7 @@ class OJCoachSession:
         if not user_cases:
             return _session_result(
                 False,
-                ["没有识别到可运行测试用例，请确认每组用例同时包含输入和期望输出。"],
+                ["没有识别到可运行测试用例，请确认每组用例至少包含期望输出（输入可为空）。"],
             )
 
         existing_cases = _extract_cases_from_json_text(self.state.test_cases)
@@ -563,7 +563,8 @@ def _normalize_case_items(raw_cases: list[Any], default_source: str) -> list[dic
         stdin = _normalize_case_text(stdin)
         expected_output = _strip_explanation_tail(_normalize_case_text(expected_output))
 
-        if not stdin and not expected_output:
+        # 无输入题仍可运行；期望输出是判断用例结果所必需的字段。
+        if not expected_output:
             continue
 
         name = str(_first_present(item, ("name", "名称")) or f"示例 {index}")
@@ -630,7 +631,7 @@ def _parse_user_cases_text(text: str) -> list[dict[str, str]]:
     for index, item in enumerate(cases, start=1):
         stdin = _normalize_case_text(item.get("stdin", ""))
         expected_output = _strip_explanation_tail(_normalize_case_text(item.get("expected_output", "")))
-        if stdin and expected_output:
+        if expected_output:
             normalized_cases.append(
                 {
                     "name": item.get("name") or f"用户用例 {index}",
@@ -653,7 +654,7 @@ def _set_case_source(cases: list[dict[str, str]], source: str) -> list[dict[str,
     for index, case in enumerate(cases, start=1):
         stdin = _normalize_case_text(str(case.get("stdin", "")))
         expected_output = _strip_explanation_tail(_normalize_case_text(str(case.get("expected_output", ""))))
-        if not stdin or not expected_output:
+        if not expected_output:
             continue
         normalized_cases.append(
             {
@@ -667,14 +668,14 @@ def _set_case_source(cases: list[dict[str, str]], source: str) -> list[dict[str,
 
 
 def _serialize_cases(cases: list[dict[str, str]]) -> str:
-    normalized_cases = [case for case in cases if case.get("stdin", "").strip() and case.get("expected_output", "").strip()]
+    normalized_cases = [case for case in cases if case.get("expected_output", "").strip()]
     if not normalized_cases:
         return ""
     return json.dumps({"test_cases": normalized_cases}, ensure_ascii=False, indent=2)
 
 
 def _count_cases(cases: list[dict[str, str]]) -> int:
-    return sum(1 for case in cases if case.get("stdin", "").strip() and case.get("expected_output", "").strip())
+    return sum(1 for case in cases if case.get("expected_output", "").strip())
 
 
 def _extract_json_text(raw_result: str) -> str:
@@ -691,15 +692,21 @@ def _extract_json_text(raw_result: str) -> str:
                 inner = inner[4:].strip()
             text = inner
 
-    object_start = text.find("{")
-    object_end = text.rfind("}")
-    if object_start != -1 and object_end != -1 and object_start < object_end:
-        return text[object_start : object_end + 1]
-
     array_start = text.find("[")
     array_end = text.rfind("]")
-    if array_start != -1 and array_end != -1 and array_start < array_end:
+    object_start = text.find("{")
+    object_end = text.rfind("}")
+
+    # 取最早出现的 JSON 容器。对象数组中的“[”位于“{”之前，不能截成内部对象。
+    if (
+        array_start != -1
+        and array_end != -1
+        and array_start < array_end
+        and (object_start == -1 or array_start < object_start)
+    ):
         return text[array_start : array_end + 1]
+    if object_start != -1 and object_end != -1 and object_start < object_end:
+        return text[object_start : object_end + 1]
     return ""
 
 
@@ -742,9 +749,8 @@ def _strip_explanation_tail(text: str) -> str:
 def _count_runnable_cases_json(raw_json: str) -> int:
     runnable_count = 0
     for case in _extract_cases_from_json_text(raw_json):
-        stdin = str(case.get("stdin", "")).strip()
         expected_output = str(case.get("expected_output", "")).strip()
-        if stdin and expected_output:
+        if expected_output:
             runnable_count += 1
     return runnable_count
 
@@ -752,7 +758,7 @@ def _count_runnable_cases_json(raw_json: str) -> int:
 def _count_cases_by_source(raw_json: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for case in _extract_cases_from_json_text(raw_json):
-        if not case.get("stdin", "").strip() or not case.get("expected_output", "").strip():
+        if not case.get("expected_output", "").strip():
             continue
         source = str(case.get("source") or "未知")
         counts[source] = counts.get(source, 0) + 1
@@ -773,9 +779,8 @@ def _count_runnable_problem_cases(analysis_result: str) -> int:
     for case in cases:
         if not isinstance(case, dict):
             continue
-        stdin = str(case.get("stdin", "")).strip()
         expected_output = str(case.get("expected_output", "")).strip()
-        if stdin and expected_output:
+        if expected_output:
             runnable_count += 1
     return runnable_count
 

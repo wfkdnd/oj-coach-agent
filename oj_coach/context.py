@@ -228,7 +228,7 @@ def _summarize_test_cases(state: Any) -> str:
     for case in cases:
         if not isinstance(case, dict):
             continue
-        if str(case.get("stdin", "")).strip() and str(case.get("expected_output", "")).strip():
+        if str(case.get("expected_output", "")).strip():
             runnable_count += 1
             source = str(case.get("source") or "未知")
             source_counts[source] = source_counts.get(source, 0) + 1

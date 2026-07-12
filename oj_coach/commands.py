@@ -321,7 +321,7 @@ def _append_output(existing: str, addition: str) -> str:
 
 
 DEPRECATED_SINGLE_CASE_TEXT = """\
-已统一为 /set_cases：请在一个用例里同时提供输入和期望输出。
+已统一为 /set_cases：每组用例需提供期望输出；无输入题可将输入留空。
 示例格式：
 输入：
 1 2
@@ -337,7 +337,7 @@ HELP_TEXT = """\
   /analyze                    重新分析当前题目
   /paste_code <language>      粘贴完整 OJ 代码，language 为 python/cpp/java
   /load_code <path>           从 .py / .cpp / .java 读取代码并识别语言
-  /set_cases                  添加用户测试用例，直到 END；每组用例需同时包含输入和输出
+  /set_cases                  添加用户测试用例，直到 END；期望输出必填，输入可为空
   /set_timeout <ms>           设置运行超时时间
   /run                        运行当前代码
   /ask                        多行输入追问，直到 END；需要 LLM 环境变量

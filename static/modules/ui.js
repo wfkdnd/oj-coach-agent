@@ -367,45 +367,72 @@ function initResizers() {
     });
 }
 
-// ── 文件上传（题目面板：点击 + 拖拽）───────────────
+// ── 文件上传（题目/代码面板：点击 + 独立拖拽）───────
 
 function _initFileUpload() {
-    const fileInput = document.getElementById('problemFileInput');
-    const workspace = document.getElementById('workspace');
-    const dropZone = document.getElementById('problemDropZone');
+    _bindFileUpload({
+        fileInputId: 'problemFileInput',
+        panelBodyId: 'problemPanelBody',
+        dropZoneId: 'problemDropZone',
+        target: 'problem',
+    });
+    _bindFileUpload({
+        fileInputId: 'codeFileInput',
+        panelBodyId: 'codePanelBody',
+        dropZoneId: 'codeDropZone',
+        target: 'code',
+    });
+}
 
-    if (!fileInput || !workspace || !dropZone) return;
-
-    // ── 点击浏览 ──
+/** 将点击和拖拽事件限制在各自面板，避免题目文件与代码文件串入。 */
+function _bindFileUpload({ fileInputId, panelBodyId, dropZoneId, target }) {
+    const fileInput = document.getElementById(fileInputId);
+    const panelBody = document.getElementById(panelBodyId);
+    const dropZone = document.getElementById(dropZoneId);
+    if (!fileInput || !panelBody || !dropZone) return;
 
     fileInput.addEventListener('change', () => {
         const file = fileInput.files[0];
-        if (file) _loadFile(file);
+        if (file) _loadFile(file, target);
+        // 允许连续选择同一个文件时仍触发 change。
         fileInput.value = '';
     });
 
-    // ── 拖拽 ──
+    let dragDepth = 0;
+    const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
 
-    workspace.addEventListener('dragenter', (e) => {
+    panelBody.addEventListener('dragenter', (e) => {
+        if (!isFileDrag(e)) return;
         e.preventDefault();
+        e.stopPropagation();
+        dragDepth += 1;
         dropZone.classList.add('show');
     });
 
-    workspace.addEventListener('dragover', (e) => {
+    panelBody.addEventListener('dragover', (e) => {
+        if (!isFileDrag(e)) return;
         e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
     });
 
-    workspace.addEventListener('dragleave', (e) => {
-        if (e.relatedTarget === null || !workspace.contains(e.relatedTarget)) {
-            dropZone.classList.remove('show');
-        }
+    panelBody.addEventListener('dragleave', (e) => {
+        // 部分浏览器在 dragleave 阶段会清空 dataTransfer.types，按已记录深度收尾更可靠。
+        if (dragDepth === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) dropZone.classList.remove('show');
     });
 
-    workspace.addEventListener('drop', (e) => {
+    panelBody.addEventListener('drop', (e) => {
+        if (!isFileDrag(e)) return;
         e.preventDefault();
+        e.stopPropagation();
+        dragDepth = 0;
         dropZone.classList.remove('show');
         const file = e.dataTransfer.files[0];
-        if (file) _loadFile(file);
+        if (file) _loadFile(file, target);
     });
 }
 
@@ -425,24 +452,86 @@ function _setEditorContent(textareaId, content) {
     // 刷新编辑器尺寸（内容变长后需要重新测量）
     const tabMap = { problemInput: 'problem', codeInput: 'code', testCaseInput: 'cases' };
     if (tabMap[textareaId]) _refreshEditor(tabMap[textareaId]);
+    if (textareaId === 'problemInput' && window.__problemPreviewing) {
+        _renderProblemMarkdownPreview();
+    }
 }
 
-/** 读取文件内容并填入题目编辑器 */
-async function _loadFile(file) {
+/** 读取文件内容并填入指定编辑器。 */
+async function _loadFile(file, target = 'problem') {
     try {
         const text = await file.text();
         if (!text.trim()) {
             showToast('文件内容为空', 'toast-warning');
             return;
         }
+        if (target === 'code') {
+            _setEditorContent('codeInput', text);
+            _selectLanguageForCodeFile(file.name);
+            showToast('已加载代码: ' + file.name);
+            switchTab('code');
+            return;
+        }
+
         _setEditorContent('problemInput', text);
-        // 自动从题目中提取测试用例
+        // 题目文件加载后自动提取测试用例。
         _extractAndPopulateTestCases(text);
+        // Markdown 文件默认以阅读视图打开，仍可点击“编辑”返回原文。
+        _setProblemPreview(/\.(md|markdown)$/i.test(file.name));
         showToast('已加载: ' + file.name);
         switchTab('problem');
     } catch (err) {
         showToast('读取文件失败: ' + err.message, 'toast-error');
     }
+}
+
+/** 根据已支持的代码扩展名同步语言选择器；.txt 保留用户当前选择。 */
+function _selectLanguageForCodeFile(fileName) {
+    const extension = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+    const language = {
+        py: 'python',
+        cpp: 'cpp',
+        cc: 'cpp',
+        cxx: 'cpp',
+        java: 'java',
+    }[extension];
+    if (!language) return;
+
+    const langSelect = document.getElementById('langSelect');
+    if (langSelect) langSelect.value = language;
+    if (window.__updateCodeLang) window.__updateCodeLang(language);
+}
+
+// ── 题目 Markdown 预览 ─────────────────────────────
+
+window.__problemPreviewing = false;
+
+function _renderProblemMarkdownPreview() {
+    const preview = document.getElementById('problemMarkdownPreview');
+    if (!preview || typeof renderMarkdown !== 'function') return;
+    preview.innerHTML = renderMarkdown(_getEditorContent('problemInput'));
+    if (typeof applyHighlight === 'function') applyHighlight(preview);
+}
+
+function _setProblemPreview(enabled) {
+    const preview = document.getElementById('problemMarkdownPreview');
+    const btn = document.getElementById('problemPreviewBtn');
+    if (!preview || !btn) return;
+
+    if (enabled && !_getEditorContent('problemInput').trim()) {
+        showToast('请先输入或上传题目内容', 'toast-warning');
+        return;
+    }
+
+    window.__problemPreviewing = Boolean(enabled);
+    preview.classList.toggle('show', window.__problemPreviewing);
+    btn.textContent = window.__problemPreviewing ? '编辑' : '预览';
+    btn.title = window.__problemPreviewing ? '返回题目原文' : '预览 Markdown 题目';
+    if (window.__problemPreviewing) _renderProblemMarkdownPreview();
+}
+
+function toggleProblemPreview() {
+    _setProblemPreview(!window.__problemPreviewing);
 }
 
 // ── 测试用例卡片管理 ────────────────────────────────
@@ -475,12 +564,20 @@ function _extractTestCases(problemText) {
     // 匹配非示例的节标题（表示离开示例区域）
     const isSectionHeading = (h) => {
         const known = ['题目描述', '输入描述', '输入格式', '输出描述', '输出格式', '数据范围',
-            '约束', '限制', '提示', '注意', '说明', '复杂度分析', '参考解答', '关键思路', '测试用例',
-            'description', 'input format', 'output format', 'constraints', 'hint', 'note'];
-        const stripped = h.replace(/^#+:?\s*/, '').trim().toLowerCase();
-        // 排除示例/样例标题
-        if (/^(示例|样例|example|sample)/i.test(stripped)) return false;
-        return known.some(k => stripped.startsWith(k.toLowerCase()));
+            '约束', '限制', '提示', '注意', '说明', '解释', '备注', '样例解释', '样例说明',
+            '示例解释', '示例说明', '复杂度分析', '参考解答', '关键思路', '测试用例',
+            'description', 'input format', 'output format', 'constraints', 'hint', 'note',
+            'explanation', 'sample explanation', 'example explanation'];
+        const stripped = h
+            .replace(/^#+\s*/, '')
+            .replace(/^[*_\s]+|[*_\s]+$/g, '')
+            .trim()
+            .replace(/[：:]\s*$/, '')
+            .trim()
+            .toLowerCase();
+        if (known.some(k => stripped === k.toLowerCase())) return true;
+        return /^(样例|示例)\s*(解释|说明)(\s*\d+)?$/i.test(stripped)
+            || /^(sample|example)\s+explanation(\s+\d+)?$/i.test(stripped);
     };
 
     // 检测是否带冒号的纯输入/输出行（如 "输入："、"输出："）
@@ -609,6 +706,10 @@ function _extractTestCases(problemText) {
                 }
                 continue;
             }
+            if (fallbackKey && isSectionHeading(trimmed)) {
+                fallbackKey = '';
+                continue;
+            }
             if (fallbackKey && fallbackCurrent[fallbackKey] !== undefined && trimmed && !trimmed.startsWith('#')) {
                 fallbackCurrent[fallbackKey] += (fallbackCurrent[fallbackKey] ? '\n' : '') + trimmed;
             }
@@ -618,7 +719,7 @@ function _extractTestCases(problemText) {
         }
     }
 
-    return samples.filter(s => s.stdin.trim() || s.expected_output.trim()).map((s, i) => ({
+    return samples.filter(s => s.expected_output.trim()).map((s, i) => ({
         name: `题目样例 ${i + 1}`,
         source: '题目样例',
         stdin: s.stdin.trim(),
@@ -663,16 +764,16 @@ function _renderTestCaseList() {
             </div>
             <div class="tc-card-fields">
                 <div class="tc-field">
-                    <span class="tc-field-label">输入 (stdin)</span>
+                    <span class="tc-field-label">输入 (stdin，可为空)</span>
                     <textarea rows="2" data-tc-index="${i}" data-tc-field="stdin"
                         onchange="_onTestCaseFieldChange(this)" 
-                        oninput="_autoResizeTcTextarea(this)">${escapeHtml(tc.stdin)}</textarea>
+                        oninput="_onTestCaseFieldInput(this)">${escapeHtml(tc.stdin)}</textarea>
                 </div>
                 <div class="tc-field">
                     <span class="tc-field-label">期望输出</span>
                     <textarea rows="2" data-tc-index="${i}" data-tc-field="expected_output"
                         onchange="_onTestCaseFieldChange(this)" 
-                        oninput="_autoResizeTcTextarea(this)">${escapeHtml(tc.expected_output)}</textarea>
+                        oninput="_onTestCaseFieldInput(this)">${escapeHtml(tc.expected_output)}</textarea>
                 </div>
             </div>
         </div>
@@ -697,6 +798,17 @@ function _onTestCaseFieldChange(el) {
     if (idx >= 0 && idx < window.__testCases.length && field) {
         window.__testCases[idx][field] = el.value;
     }
+}
+
+/** 输入时立即同步数据，避免点击提交时 change 事件尚未落到模型。 */
+function _onTestCaseFieldInput(el) {
+    _onTestCaseFieldChange(el);
+    _autoResizeTcTextarea(el);
+}
+
+function _syncTestCaseFields() {
+    document.querySelectorAll('#testCaseList textarea[data-tc-index][data-tc-field]')
+        .forEach(_onTestCaseFieldChange);
 }
 
 /** 手动添加空白用例 */
@@ -731,41 +843,50 @@ function deleteTestCase(index) {
 
 /** 将用例卡片数据序列化为提交格式（JSON） */
 function _serializeTestCases() {
-    return JSON.stringify(window.__testCases.map(tc => ({
-        stdin: tc.stdin,
-        expected_output: tc.expected_output,
-    })));
+    _syncTestCaseFields();
+    return JSON.stringify({
+        test_cases: window.__testCases.map(tc => ({
+            stdin: tc.stdin,
+            expected_output: tc.expected_output,
+        })),
+    });
 }
 
 // ── 锁按钮降级（CodeMirror 未加载时）────────────
-if (!window.toggleProblemLock) {
-    window.__problemLocked = false;
-    window.toggleProblemLock = function() {
-        const editor = window.__editorViews && window.__editorViews['problemInput'];
-        if (editor && editor._editableCompartment && window.__cmImports) {
-            // CodeMirror 模式（Compartment）
-            window.__problemLocked = !window.__problemLocked;
-            editor.dispatch({
-                effects: editor._editableCompartment.reconfigure(
-                    window.__cmImports.EditorView.editable.of(!window.__problemLocked)
-                )
-            });
-        } else {
-            // 降级为原生 textarea readOnly
-            const ta = document.getElementById('problemInput');
-            if (ta) {
-                window.__problemLocked = !window.__problemLocked;
-                ta.readOnly = window.__problemLocked;
-                ta.style.opacity = window.__problemLocked ? '0.6' : '1';
-            }
+function _installFallbackEditorLock({ toggleName, stateKey, textareaId, buttonId, label }) {
+    if (window[toggleName]) return;
+    window[stateKey] = Boolean(window[stateKey]);
+    window[toggleName] = function() {
+        window[stateKey] = !window[stateKey];
+        const ta = document.getElementById(textareaId);
+        if (ta) {
+            ta.readOnly = window[stateKey];
+            ta.style.opacity = window[stateKey] ? '0.6' : '1';
         }
-        const btn = document.getElementById('lockProblemBtn');
+        const btn = document.getElementById(buttonId);
         if (btn) {
-            btn.textContent = window.__problemLocked ? '🔒' : '🔓';
-            btn.title = window.__problemLocked ? '解锁题目（允许编辑）' : '锁定题目（禁止编辑）';
+            btn.textContent = window[stateKey] ? '🔒' : '🔓';
+            btn.title = window[stateKey]
+                ? `解锁${label}（允许编辑）`
+                : `锁定${label}（禁止编辑）`;
         }
     };
 }
+
+_installFallbackEditorLock({
+    toggleName: 'toggleProblemLock',
+    stateKey: '__problemLocked',
+    textareaId: 'problemInput',
+    buttonId: 'lockProblemBtn',
+    label: '题目',
+});
+_installFallbackEditorLock({
+    toggleName: 'toggleCodeLock',
+    stateKey: '__codeLocked',
+    textareaId: 'codeInput',
+    buttonId: 'lockCodeBtn',
+    label: '代码',
+});
 
 // ── 事件绑定 ────────────────────────────────────────
 

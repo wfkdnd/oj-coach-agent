@@ -80,7 +80,7 @@ async function streamCommand(payload) {
             if (!streamMsgEl) {
                 streamMsgEl = document.createElement('div');
                 streamMsgEl.className = 'msg msg-streaming';
-                streamMsgEl.innerHTML = '<div class="msg-header">回答</div><span class="stream-text"></span>';
+                streamMsgEl.innerHTML = '<div class="msg-header">回答</div><div class="stream-text"></div>';
                 container.appendChild(streamMsgEl);
                 scrollChat();
                 textSpan = streamMsgEl.querySelector('.stream-text');
@@ -216,12 +216,19 @@ async function submitCode() {
 }
 
 async function submitCases() {
-    // 从卡片数据序列化用例
+    // 先从当前 DOM 同步，避免用户刚输入就点击提交时数据仍停留在旧值。
+    if (typeof _syncTestCaseFields === 'function') _syncTestCaseFields();
     const cases = window.__testCases || [];
     if (cases.length === 0) { addErrorMsg('请先添加测试用例（可从题目中自动检测或手动添加）'); return; }
+    if (!cases.some(c => String(c.expected_output || '').trim())) {
+        addErrorMsg('没有识别到可运行测试用例，请确认每组用例至少包含期望输出（输入可为空）。');
+        return;
+    }
     const text = (typeof _serializeTestCases === 'function')
         ? _serializeTestCases()
-        : JSON.stringify(cases.map(c => ({ stdin: c.stdin, expected_output: c.expected_output })));
+        : JSON.stringify({
+            test_cases: cases.map(c => ({ stdin: c.stdin, expected_output: c.expected_output })),
+        });
     await normalCommand({ command: 'set_cases', args: '', input_text: text });
 }
 
@@ -236,46 +243,158 @@ function addMsg(type, header, text) {
     const container = document.getElementById('chatMessages');
     const div = document.createElement('div');
     div.className = `msg msg-${type}`;
-    const rendered = (type === 'assistant' || type === 'streaming')
-        ? renderMarkdown(text)
-        : escapeHtml(text).replace(/\n/g, '<br>');
+    // 用户输入按纯文本展示；系统、结果、错误和回答均安全渲染 Markdown。
+    const rendered = type === 'user'
+        ? escapeHtml(text).replace(/\n/g, '<br>')
+        : renderMarkdown(text);
     div.innerHTML = `<div class="msg-header">${header}</div>${rendered}`;
     container.appendChild(div);
     applyHighlight(div);
     scrollChat();
 }
 
-// ── 简易 Markdown 渲染 ──────────────────────────────
+// ── 安全 Markdown 渲染 ──────────────────────────────
 
 function renderMarkdown(text) {
-    const escaped = escapeHtml(text);
-    const parts = [];
-    let lastIndex = 0;
-    const codeRegex = /```(\w*)\n?([\s\S]*?)```/g;
-    let match;
-    while ((match = codeRegex.exec(escaped)) !== null) {
-        const [full, lang, code] = match;
-        parts.push(renderMarkdownInline(escaped.slice(lastIndex, match.index)));
-        parts.push(renderCodeBlock(lang, code));
-        lastIndex = match.index + full.length;
+    const normalized = String(text ?? '').replace(/\r\n?/g, '\n');
+    return `<div class="markdown-body">${_renderMarkdownBlocks(normalized)}</div>`;
+}
+
+function _renderMarkdownBlocks(text) {
+    const lines = text.split('\n');
+    const html = [];
+    let paragraph = [];
+    let index = 0;
+
+    const flushParagraph = () => {
+        if (paragraph.length === 0) return;
+        html.push(`<p>${paragraph.map(renderMarkdownInline).join('<br>')}</p>`);
+        paragraph = [];
+    };
+
+    while (index < lines.length) {
+        const line = lines[index];
+        const trimmed = line.trim();
+
+        const fence = trimmed.match(/^```([\w+-]*)\s*$/);
+        if (fence) {
+            flushParagraph();
+            const codeLines = [];
+            index += 1;
+            while (index < lines.length && !/^```\s*$/.test(lines[index].trim())) {
+                codeLines.push(lines[index]);
+                index += 1;
+            }
+            if (index < lines.length) index += 1;
+            html.push(renderCodeBlock(fence[1], codeLines.join('\n')));
+            continue;
+        }
+
+        if (!trimmed) {
+            flushParagraph();
+            index += 1;
+            continue;
+        }
+
+        const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+        if (heading) {
+            flushParagraph();
+            const level = heading[1].length;
+            html.push(`<h${level}>${renderMarkdownInline(heading[2])}</h${level}>`);
+            index += 1;
+            continue;
+        }
+
+        if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+            flushParagraph();
+            html.push('<hr>');
+            index += 1;
+            continue;
+        }
+
+        if (line.includes('|') && index + 1 < lines.length && _isMarkdownTableSeparator(lines[index + 1])) {
+            flushParagraph();
+            const headers = _splitMarkdownTableRow(line);
+            index += 2;
+            const rows = [];
+            while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
+                rows.push(_splitMarkdownTableRow(lines[index]));
+                index += 1;
+            }
+            const headHtml = headers.map(cell => `<th>${renderMarkdownInline(cell)}</th>`).join('');
+            const bodyHtml = rows.map(row => `<tr>${headers.map((_, cellIndex) =>
+                `<td>${renderMarkdownInline(row[cellIndex] || '')}</td>`).join('')}</tr>`).join('');
+            html.push(`<div class="markdown-table-wrap"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`);
+            continue;
+        }
+
+        if (/^\s*>\s?/.test(line)) {
+            flushParagraph();
+            const quoteLines = [];
+            while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+                quoteLines.push(lines[index].replace(/^\s*>\s?/, ''));
+                index += 1;
+            }
+            html.push(`<blockquote>${_renderMarkdownBlocks(quoteLines.join('\n'))}</blockquote>`);
+            continue;
+        }
+
+        const unordered = line.match(/^\s*[-+*]\s+(.+)$/);
+        const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+        if (unordered || ordered) {
+            flushParagraph();
+            const tag = unordered ? 'ul' : 'ol';
+            const items = [];
+            while (index < lines.length) {
+                const itemMatch = tag === 'ul'
+                    ? lines[index].match(/^\s*[-+*]\s+(.+)$/)
+                    : lines[index].match(/^\s*\d+[.)]\s+(.+)$/);
+                if (!itemMatch) break;
+                items.push(`<li>${renderMarkdownInline(itemMatch[1])}</li>`);
+                index += 1;
+            }
+            html.push(`<${tag}>${items.join('')}</${tag}>`);
+            continue;
+        }
+
+        paragraph.push(line);
+        index += 1;
     }
-    parts.push(renderMarkdownInline(escaped.slice(lastIndex)));
-    return parts.join('');
+
+    flushParagraph();
+    return html.join('');
 }
 
 function renderCodeBlock(lang, code) {
-    const langLabel = lang ? ` <span class="code-lang">${lang}</span>` : '';
-    const langClass = lang ? `hljs language-${lang}` : 'hljs';
-    return `<div class="code-block">${langLabel}<pre><code class="${langClass}">${code.trim()}</code></pre></div>`;
+    const safeLang = String(lang || '').replace(/[^\w+-]/g, '');
+    const langLabel = safeLang ? ` <span class="code-lang">${safeLang}</span>` : '';
+    const langClass = safeLang ? `hljs language-${safeLang}` : 'hljs';
+    return `<div class="code-block">${langLabel}<pre><code class="${langClass}">${escapeHtml(code).trim()}</code></pre></div>`;
 }
 
 function renderMarkdownInline(text) {
-    let result = text;
-    result = result.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+    const codeSpans = [];
+    let result = escapeHtml(String(text ?? ''));
+    result = result.replace(/`([^`]+)`/g, (_, code) => {
+        const token = `\u0000CODE${codeSpans.length}\u0000`;
+        codeSpans.push(`<code class="inline-code">${code}</code>`);
+        return token;
+    });
+    result = result.replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    result = result.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    result = result.replace(/\n/g, '<br>');
+    result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    result = result.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+    result = result.replace(/\u0000CODE(\d+)\u0000/g, (_, index) => codeSpans[Number(index)]);
     return result;
+}
+
+function _isMarkdownTableSeparator(line) {
+    return /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function _splitMarkdownTableRow(line) {
+    return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
 }
 
 function applyHighlight(container) {
