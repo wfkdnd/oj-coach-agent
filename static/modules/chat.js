@@ -50,6 +50,10 @@ async function normalCommand(payload) {
         addResultMsg(data.output);
     }
     await refreshStatus();
+    if (typeof _isReadingLogOpen === 'function' && _isReadingLogOpen()) {
+        await loadReadingLog();
+    }
+    return data;
 }
 
 // SSE 流式处理（含断线重连）
@@ -171,6 +175,9 @@ async function streamCommand(payload) {
     state.isStreaming = false;
     setSendDisabled(false);
     await refreshStatus();
+    if (typeof _isReadingLogOpen === 'function' && _isReadingLogOpen()) {
+        await loadReadingLog();
+    }
 }
 
 function sleep(ms) {
@@ -204,7 +211,11 @@ async function submitProblem() {
     if (typeof _extractAndPopulateTestCases === 'function') {
         _extractAndPopulateTestCases(text);
     }
-    await normalCommand({ command: 'paste_problem', args: '', input_text: text });
+    const result = await normalCommand({ command: 'paste_problem', args: '', input_text: text });
+    if (result && result.ok) {
+        window.__testCasesDirty = false;
+        await refreshStatus();
+    }
 }
 
 async function submitCode() {
@@ -229,7 +240,11 @@ async function submitCases() {
         : JSON.stringify({
             test_cases: cases.map(c => ({ stdin: c.stdin, expected_output: c.expected_output })),
         });
-    await normalCommand({ command: 'set_cases', args: '', input_text: text });
+    const result = await normalCommand({ command: 'set_cases', args: '', input_text: text });
+    if (result && result.ok) {
+        window.__testCasesDirty = false;
+        await refreshStatus();
+    }
 }
 
 // ── 对话消息 ────────────────────────────────────────

@@ -169,6 +169,36 @@ class TestSessionAPI:
         assert resp.status_code == 404
         assert "不存在" in resp.json()["detail"]
 
+    def test_status_returns_extracted_test_case_details(self):
+        sid = client.post("/api/sessions").json()["session_id"]
+        problem = "## A+B\n样例输入：\n1 2\n样例输出：\n3"
+        client.post(
+            f"/api/sessions/{sid}/command",
+            json={"command": "paste_problem", "input_text": problem},
+        )
+
+        status = client.get(f"/api/sessions/{sid}/status").json()["status"]
+
+        assert status["test_cases"][0]["stdin"] == "1 2"
+        assert status["test_cases"][0]["expected_output"] == "3"
+        _cleanup_session(sid)
+
+    def test_reading_log_and_context_endpoints(self):
+        sid = client.post("/api/sessions").json()["session_id"]
+        client.post(f"/api/sessions/{sid}/command", json={"raw": "/status"})
+
+        events = client.get(f"/api/sessions/{sid}/events").json()
+        context = client.get(f"/api/sessions/{sid}/context").json()
+        compressed = client.post(f"/api/sessions/{sid}/context/compress").json()
+
+        assert events["ok"] is True
+        assert len(events["events"]) >= 2
+        assert context["ok"] is True
+        assert "snapshot" in context
+        assert compressed["ok"] is True
+        assert compressed["snapshot"]["is_empty"] is False
+        _cleanup_session(sid)
+
 
 # ═══════════════════════════════════════════════════════════════
 # 命令执行 API 测试
@@ -268,6 +298,22 @@ class TestCommandAPI:
         data = resp.json()
         assert data["ok"] is False
         assert "未知命令" in data["output"]
+        _cleanup_session(sid)
+
+    def test_compress_command(self):
+        sid = client.post("/api/sessions").json()["session_id"]
+        client.post(
+            f"/api/sessions/{sid}/command",
+            json={"command": "paste_problem", "input_text": "# A+B\n输出：\n3"},
+        )
+
+        data = client.post(
+            f"/api/sessions/{sid}/command",
+            json={"raw": "/compress"},
+        ).json()
+
+        assert data["ok"] is True
+        assert "上下文压缩完成" in data["output"]
         _cleanup_session(sid)
 
     def test_structured_command_format(self):

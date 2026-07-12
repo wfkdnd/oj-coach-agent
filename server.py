@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from oj_coach import OJCoachCommandRouter, OJCoachSession, parse_command_line
+from oj_coach.api import ApiCommandRequest, LocalSessionStore, serialize_command_response
 from oj_coach.commands import CommandParseError, CommandResponse
 
 # ── 应用初始化 ──────────────────────────────────────────────
@@ -44,7 +45,9 @@ STATIC_DIR.mkdir(exist_ok=True)
 SESSION_TTL_SECONDS = 30 * 60
 
 # 内存会话管理：session_id -> OJCoachCommandRouter
+# `sessions` 保留给既有调用与测试；阶段 6/7 状态统一由 session_store 管理。
 sessions: dict[str, OJCoachCommandRouter] = {}
+session_store = LocalSessionStore()
 
 # 会话最后访问时间：session_id -> float (timestamp)
 _session_last_access: dict[str, float] = {}
@@ -71,6 +74,7 @@ async def _cleanup_expired_sessions() -> None:
         ]
         for sid in expired:
             sessions.pop(sid, None)
+            session_store.delete_session(sid)
             _session_last_access.pop(sid, None)
             _stream_cache.pop(sid, None)
 
@@ -117,8 +121,8 @@ async def check_llm_status():
 async def create_session():
     """创建新的刷题会话，返回 session_id。"""
     session_id = uuid.uuid4().hex[:12]
-    session = OJCoachSession()
-    router = OJCoachCommandRouter(session)
+    session_store.create_session(session_id=session_id)
+    router = session_store.get_router(session_id)
     sessions[session_id] = router
     _touch_session(session_id)
     return {"ok": True, "session_id": session_id}
@@ -130,7 +134,11 @@ async def list_sessions():
     return {
         "ok": True,
         "sessions": [
-            {"session_id": sid, "language": router.session.state.language or "未设置"}
+            {
+                "session_id": sid,
+                "language": router.session.state.language or "未设置",
+                "event_count": session_store.describe_session(sid)["event_count"],
+            }
             for sid, router in sessions.items()
         ],
     }
@@ -140,6 +148,7 @@ async def list_sessions():
 async def delete_session(session_id: str):
     """删除指定会话。"""
     sessions.pop(session_id, None)
+    session_store.delete_session(session_id)
     _session_last_access.pop(session_id, None)
     _stream_cache.pop(session_id, None)
     return {"ok": True}
@@ -153,6 +162,31 @@ async def get_session_status(session_id: str):
     return {"ok": True, "status": status}
 
 
+@app.get("/api/sessions/{session_id}/events")
+async def get_session_events(session_id: str, limit: int = 30):
+    """阶段 6 阅读日志：返回最近事件，不保存完整题目或代码。"""
+    _get_router(session_id)
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "events": session_store.recent_events(session_id, limit=limit),
+    }
+
+
+@app.get("/api/sessions/{session_id}/context")
+async def get_session_context(session_id: str):
+    """返回阶段 6/7 压缩状态和最近快照。"""
+    _get_router(session_id)
+    return {"ok": True, **session_store.context_state(session_id)}
+
+
+@app.post("/api/sessions/{session_id}/context/compress")
+async def compress_session_context(session_id: str):
+    """手动压缩入口，与 /compress 命令使用同一实现。"""
+    _get_router(session_id)
+    return {"ok": True, **session_store.compress_context(session_id, force=True)}
+
+
 # ── 命令执行 API ───────────────────────────────────────────
 
 @app.post("/api/sessions/{session_id}/command")
@@ -163,9 +197,12 @@ async def execute_command(session_id: str, payload: dict[str, Any]):
     1. 结构化：{"command": "paste_code", "args": "python", "input_text": "..."}
     2. 原始命令：{"raw": "/run"}
     """
-    router = _get_router(session_id)
+    _get_router(session_id)
     command, args, input_text = _parse_payload(payload)
-    response = router.execute(command, args, input_text=input_text)
+    response = session_store.execute_command(
+        session_id,
+        ApiCommandRequest(command=command, args=args, input_text=input_text),
+    )
     return _serialize_response(response)
 
 
@@ -187,9 +224,12 @@ async def execute_command_stream(session_id: str, payload: dict[str, Any]):
                 yield {"event": "done", "data": ""}
             return EventSourceResponse(replay_cache())
 
-    router = _get_router(session_id)
+    _get_router(session_id)
     command, args, input_text = _parse_payload(payload)
-    response = router.execute(command, args, input_text=input_text)
+    response = session_store.execute_command(
+        session_id,
+        ApiCommandRequest(command=command, args=args, input_text=input_text),
+    )
 
     async def event_generator():
         base = _serialize_response(response)
@@ -237,13 +277,7 @@ def _parse_payload(payload: dict[str, Any]) -> tuple[str, str, str | None]:
 
 def _serialize_response(response: CommandResponse) -> dict[str, Any]:
     """将 CommandResponse 序列化为 JSON 安全的字典。stream 不能直接序列化。"""
-    return {
-        "ok": response.ok,
-        "messages": response.messages,
-        "output": response.output,
-        "data": response.data,
-        "has_stream": response.stream is not None,
-    }
+    return serialize_command_response(response)
 
 
 def _json_dumps(obj: Any) -> str:

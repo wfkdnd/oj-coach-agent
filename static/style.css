@@ -94,6 +94,175 @@ body {
     gap: 4px;
 }
 
+.reading-log-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.reading-log-toggle:hover,
+.reading-log-toggle.active {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+#readingLogCount {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--bg-input);
+    color: var(--text-muted);
+    font-size: 10px;
+    text-align: center;
+}
+
+/* ── 阶段 6/7 阅读日志抽屉 ─────────────────────── */
+
+.reading-log-backdrop {
+    position: fixed;
+    inset: 40px 0 0;
+    display: none;
+    z-index: 390;
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.reading-log-backdrop.show { display: block; }
+
+.reading-log-drawer {
+    position: fixed;
+    top: 40px;
+    right: 0;
+    bottom: 0;
+    width: min(440px, 92vw);
+    display: flex;
+    flex-direction: column;
+    z-index: 400;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border);
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.28);
+    transform: translateX(102%);
+    transition: transform 0.2s ease;
+}
+
+.reading-log-drawer.show { transform: translateX(0); }
+
+.reading-log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.reading-log-header > div:first-child {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.reading-log-header small {
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+.reading-log-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.reading-log-actions button {
+    padding: 3px 8px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.reading-log-actions button:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.reading-log-body {
+    flex: 1;
+    overflow: auto;
+    padding: 12px 14px 24px;
+}
+
+.reading-log-body section + section { margin-top: 16px; }
+
+.reading-log-body h3 {
+    margin-bottom: 7px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.reading-log-status,
+.reading-log-snapshot,
+.reading-log-events {
+    padding: 9px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.reading-log-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.reading-log-chip {
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.reading-log-chip.warning { color: var(--warning); }
+.reading-log-chip.success { color: var(--success); }
+
+.reading-log-event {
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.reading-log-event:last-child { border-bottom: 0; }
+
+.reading-log-event-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--text-primary);
+}
+
+.reading-log-event-time {
+    color: var(--text-muted);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.reading-log-event-detail {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    overflow-wrap: anywhere;
+}
+
 /* ── 主工作区（左右分栏）────────────────────────── */
 
 .main-area {

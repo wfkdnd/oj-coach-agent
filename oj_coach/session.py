@@ -240,6 +240,7 @@ class OJCoachSession:
 
     def status(self) -> dict[str, Any]:
         source_counts = _count_cases_by_source(self.state.test_cases)
+        test_cases = _extract_cases_from_json_text(self.state.test_cases)
         return {
             "problem_text_set": bool(self.state.problem_text.strip()),
             "problem_text_chars": len(self.state.problem_text),
@@ -250,6 +251,8 @@ class OJCoachSession:
             "test_cases_set": bool(self.state.test_cases.strip()),
             "runnable_case_count": _count_runnable_cases_json(self.state.test_cases),
             "test_case_sources": source_counts,
+            # WebUI 需要统一用例明细来展示后端/LLM 提取结果；不包含代码或凭据。
+            "test_cases": test_cases,
             "last_run_result_set": bool(self.state.last_run_result.strip()),
             "timeout_ms": self.state.timeout_ms,
         }
@@ -276,9 +279,18 @@ class OJCoachSession:
         if llm is None:
             return ""
 
+        summary_prompt = self.build_summary_explanation_prompt(summary_result, notes)
+        compressed_context = self._get_provided_context("请结合当前上下文快照生成复盘讲解。")
+        if compressed_context:
+            summary_prompt += f"""\
+
+阶段 6/7 上下文快照与最新状态：
+{compressed_context}
+"""
+
         messages = [
             {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
-            {"role": "user", "content": self.build_summary_explanation_prompt(summary_result, notes)},
+            {"role": "user", "content": summary_prompt},
         ]
         try:
             return llm.chat(messages)
@@ -286,13 +298,9 @@ class OJCoachSession:
             return f"（LLM 复盘讲解生成失败：{exc}）"
 
     def build_question_context(self, question: str) -> str:
-        if self.context_provider is not None:
-            try:
-                provided_context = self.context_provider(question)
-            except Exception:
-                provided_context = ""
-            if provided_context.strip():
-                return provided_context
+        provided_context = self._get_provided_context(question)
+        if provided_context:
+            return provided_context
 
         return f"""\
 用户问题：
@@ -307,6 +315,15 @@ class OJCoachSession:
 题目分析：
 {_clip(self.state.analysis_result)}
 """
+
+    def _get_provided_context(self, purpose: str) -> str:
+        """读取阶段 6/7 压缩上下文；失败时由调用方自动回退到原始状态。"""
+        if self.context_provider is None:
+            return ""
+        try:
+            return str(self.context_provider(purpose) or "").strip()
+        except Exception:
+            return ""
 
     def build_run_analysis_prompt(self) -> str:
         return f"""\

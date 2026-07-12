@@ -436,6 +436,7 @@ def test_help_text_contains_all_commands():
         "/run",
         "/ask",
         "/summary",
+        "/compress",
         "/status",
         "/exit",
     ]

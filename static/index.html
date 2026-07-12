@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OJ Coach Agent</title>
-    <link rel="stylesheet" href="/static/style.css?v=10">
+    <link rel="stylesheet" href="/static/style.css?v=11">
     <script type="importmap">
     {
         "imports": {
@@ -41,8 +41,41 @@
         <label>超时 <input type="number" id="timeoutInput" value="3000" min="500" step="500" title="运行超时(ms)"></label>
         <span id="runStatus" class="badge">未运行</span>
         <span id="llmBadge" class="badge">LLM: 检测中...</span>
+        <button class="reading-log-toggle" id="readingLogBtn" onclick="toggleReadingLog()" title="查看阶段 6/7 阅读日志">
+            阅读日志 <span id="readingLogCount">0</span>
+        </button>
         <button class="theme-toggle" id="themeToggle" title="切换明暗主题">☽</button>
     </div>
+
+    <!-- 阶段 6/7：事件阅读日志与上下文快照 -->
+    <div class="reading-log-backdrop" id="readingLogBackdrop" onclick="toggleReadingLog(false)"></div>
+    <aside class="reading-log-drawer" id="readingLogDrawer" aria-label="阅读日志">
+        <div class="reading-log-header">
+            <div>
+                <strong>阅读日志</strong>
+                <small>事件记录与上下文压缩快照</small>
+            </div>
+            <div class="reading-log-actions">
+                <button onclick="compressReadingLogContext()" title="立即压缩上下文">压缩</button>
+                <button onclick="loadReadingLog()" title="刷新阅读日志">刷新</button>
+                <button onclick="toggleReadingLog(false)" title="关闭阅读日志">✕</button>
+            </div>
+        </div>
+        <div class="reading-log-body">
+            <section>
+                <h3>压缩状态</h3>
+                <div class="reading-log-status" id="readingLogStatus">尚未读取</div>
+            </section>
+            <section>
+                <h3>上下文快照</h3>
+                <div class="reading-log-snapshot" id="readingLogSnapshot">暂无快照</div>
+            </section>
+            <section>
+                <h3>最近事件</h3>
+                <div class="reading-log-events" id="readingLogEvents">暂无事件</div>
+            </section>
+        </div>
+    </aside>
 
     <!-- 主工作区 -->
     <div class="main-area" id="mainArea">
@@ -131,7 +164,7 @@
                     <div class="msg-header">OJ Coach</div>
                     欢迎使用 OJ Coach Agent！<br>
                     左侧标签页输入题目/代码/用例，底部输入命令开始刷题。<br>
-                    支持命令：/run /ask /summary /status /help<br>
+                    支持命令：/run /ask /summary /compress /status /help<br>
                     快捷键：Enter 发送 | Shift+Enter 换行 | Ctrl+1/2/3 切换标签 | Ctrl+B 提交代码 | ↑↓ 历史
                 </div>
             </div>
@@ -142,7 +175,7 @@
     <div class="command-bar" style="position: relative;">
         <div class="prefix">oj&gt;</div>
         <textarea id="commandInput"
-            placeholder="/run — 运行代码 | /ask 问题 — 提问 | /summary — 复盘 | 直接输入问题也可..."
+            placeholder="/run — 运行 | /ask — 提问 | /summary — 复盘 | /compress — 压缩上下文..."
             rows="1"
             autofocus
         ></textarea>
@@ -176,11 +209,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 
     <!-- 静态模块（按依赖顺序加载，均为全局函数） -->
-    <script src="/static/modules/session.js"></script>
-    <script src="/static/modules/chat.js"></script>
-    <script src="/static/modules/ui.js"></script>
-    <script src="/static/modules/theme.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/modules/session.js?v=11"></script>
+    <script src="/static/modules/chat.js?v=11"></script>
+    <script src="/static/modules/ui.js?v=11"></script>
+    <script src="/static/modules/theme.js?v=11"></script>
+    <script src="/static/app.js?v=11"></script>
 
     <!-- CodeMirror v6 ESM 导入（零构建步骤，CDN 加载） -->
     <script type="module">

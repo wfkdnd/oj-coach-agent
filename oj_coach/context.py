@@ -15,6 +15,8 @@ from typing import Any, Callable
 DEFAULT_EVENT_LIMIT = 30
 DEFAULT_CHAR_LIMIT = 12000
 SUMMARY_LIMIT = 800
+LATEST_CODE_LIMIT = 12000
+LATEST_STATE_LIMIT = 5000
 
 
 @dataclass
@@ -93,8 +95,11 @@ class ContextCompressor:
         max_chars_before_compress: int = DEFAULT_CHAR_LIMIT,
     ):
         self.generic_context_manager = generic_context_manager
+        self.snapshot_llm = getattr(generic_context_manager, "llm", None)
         if self.generic_context_manager is None and llm_factory is not None:
-            self.generic_context_manager = self._try_create_generic_manager(llm_factory)
+            self.snapshot_llm = self._try_create_llm(llm_factory)
+            if self.snapshot_llm is not None:
+                self.generic_context_manager = self._try_create_generic_manager(self.snapshot_llm)
         self.max_events_before_compress = max_events_before_compress
         self.max_chars_before_compress = max_chars_before_compress
 
@@ -115,14 +120,39 @@ class ContextCompressor:
     ) -> ContextSnapshot:
         should_compress = self.should_compress(events, session_state)
         mode = "规则摘要" if force or should_compress else "未达到阈值"
+        problem_summary = _summarize_problem(session_state)
+        code_summary = _summarize_code(session_state)
+        test_case_summary = _summarize_test_cases(session_state)
+        run_summary = _summarize_run_result(session_state)
+        # 有阶段 7 LLM 时先提供受限长度的原始对话摘要材料，随后只调用一次模型；
+        # 没有 LLM 时继续复用阶段 6 的通用/规则压缩器。
+        if self.snapshot_llm is not None:
+            conversation_summary = _messages_to_text(conversation_messages or []) or _summarize_events(events)
+        else:
+            conversation_summary = self.compress_conversation_messages(conversation_messages) or _summarize_events(events)
+
+        if (force or should_compress) and self.snapshot_llm is not None:
+            try:
+                llm_summary = self._generate_llm_snapshot_summary(
+                    problem_summary=problem_summary,
+                    code_summary=code_summary,
+                    test_case_summary=test_case_summary,
+                    run_summary=run_summary,
+                    conversation_summary=conversation_summary,
+                )
+                if llm_summary:
+                    conversation_summary = llm_summary
+                    mode = "LLM 摘要"
+            except Exception:
+                # 阶段 7 要求压缩失败时自动回退，不能影响 /ask、/summary。
+                mode = "规则摘要（LLM 回退）"
 
         return ContextSnapshot(
-            problem_summary=_summarize_problem(session_state),
-            code_summary=_summarize_code(session_state),
-            test_case_summary=_summarize_test_cases(session_state),
-            run_summary=_summarize_run_result(session_state),
-            conversation_summary=self.compress_conversation_messages(conversation_messages)
-            or _summarize_events(events),
+            problem_summary=problem_summary,
+            code_summary=code_summary,
+            test_case_summary=test_case_summary,
+            run_summary=run_summary,
+            conversation_summary=conversation_summary,
             important_facts=_build_important_facts(session_state, events),
             source_event_count=len(events),
             compressed_at=_now_iso(),
@@ -151,6 +181,10 @@ class ContextCompressor:
     ) -> str:
         """生成后续接入 LLM prompt 时可用的上下文文本。"""
 
+        latest_code = str(getattr(session_state, "code", "") or "")
+        latest_analysis = str(getattr(session_state, "analysis_result", "") or "")
+        latest_run = str(getattr(session_state, "last_run_result", "") or "")
+
         return f"""\
 用户问题：
 {question or "（无）"}
@@ -165,18 +199,51 @@ class ContextCompressor:
 
 当前状态摘要：
 {_summarize_current_state(session_state)}
+
+当前最新代码（不写入压缩快照）：
+{_clip(latest_code, LATEST_CODE_LIMIT) if latest_code.strip() else "（无）"}
+
+当前最新题目分析：
+{_clip(latest_analysis, LATEST_STATE_LIMIT) if latest_analysis.strip() else "（无）"}
+
+当前最新运行结果：
+{_clip(latest_run, LATEST_STATE_LIMIT) if latest_run.strip() else "（无）"}
 """
 
-    def _try_create_generic_manager(
+    def _generate_llm_snapshot_summary(
         self,
-        llm_factory: Callable[[], Any | None],
-    ) -> Any | None:
+        problem_summary: str,
+        code_summary: str,
+        test_case_summary: str,
+        run_summary: str,
+        conversation_summary: str,
+    ) -> str:
+        prompt = f"""\
+请把下面的 OJ 刷题上下文压缩成一段结构清晰的中文快照摘要。
+必须保留：问题本质、当前解法状态、已发现错误、已验证样例、用户仍在追问的重点。
+不要补写不存在的运行结果，不要输出完整代码。
+
+题目：{problem_summary or "（无）"}
+代码：{code_summary or "（无）"}
+测试用例：{test_case_summary or "（无）"}
+最近运行：{run_summary or "（无）"}
+对话：{conversation_summary or "（无）"}
+"""
+        return str(
+            self.snapshot_llm.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0,
+            )
+            or ""
+        ).strip()
+
+    def _try_create_llm(self, llm_factory: Callable[[], Any | None]) -> Any | None:
         try:
-            llm = llm_factory()
+            return llm_factory()
         except Exception:
             return None
-        if llm is None:
-            return None
+
+    def _try_create_generic_manager(self, llm: Any) -> Any | None:
         try:
             from context import ContextManager as GenericContextManager
         except Exception:

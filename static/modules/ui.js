@@ -12,6 +12,7 @@ const commands = [
     { cmd: '/run', desc: '运行代码' },
     { cmd: '/ask', desc: '提问' },
     { cmd: '/summary', desc: '复盘总结' },
+    { cmd: '/compress', desc: '压缩当前上下文' },
     { cmd: '/status', desc: '查看状态' },
     { cmd: '/set_timeout', desc: '设置超时' },
     { cmd: '/help', desc: '帮助' },
@@ -538,6 +539,7 @@ function toggleProblemPreview() {
 
 /** 全局用例数据：{ name, source, stdin, expected_output }[] */
 window.__testCases = [];
+window.__testCasesDirty = false;
 
 /** 从题目文本中提取样例输入输出（客户端正则，复用后端 analyze_problem 逻辑） */
 function _extractTestCases(problemText) {
@@ -546,8 +548,6 @@ function _extractTestCases(problemText) {
     let current = { stdin: '', expected_output: '' };
     let currentKey = '';   // 'stdin' | 'expected_output' | ''
     let inSample = false;  // 是否进入了示例区域
-    let inFullCodeFence = false;      // ``` 围栏内
-    let inInlineCodeFence = false;    // ~~~ 围栏内
 
     // 匹配 "### 示例 1" / "## 样例" / "示例 1：" / "Example 1:" 等
     const isSampleHeading = (h) =>
@@ -590,23 +590,8 @@ function _extractTestCases(problemText) {
         const trimmed = line.trim();
         const heading = trimmed.replace(/^#+:?\s*/, '').trim();
 
-        // ── 代码围栏追踪 ──
-        if (trimmed.startsWith('```')) {
-            if (inFullCodeFence) {
-                inFullCodeFence = false;
-            } else if (trimmed.length > 3 && trimmed.endsWith('```')) {
-                // 单行内开闭围栏（如 ```输入：```），跳过
-                continue;
-            } else {
-                inFullCodeFence = true;
-            }
-            continue;
-        }
-        if (trimmed.startsWith('~~~')) {
-            inInlineCodeFence = !inInlineCodeFence;
-            continue;
-        }
-        if (inFullCodeFence || inInlineCodeFence) continue;
+        // Markdown 围栏只跳过标记行；围栏内才是需要提取的样例正文。
+        if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) continue;
 
         // ── 示例区域标题：保存上一个，开启新的 ──
         if (isSampleHeading(heading)) {
@@ -732,6 +717,7 @@ function _extractAndPopulateTestCases(problemText) {
     const extracted = _extractTestCases(problemText);
     if (extracted.length > 0) {
         window.__testCases = extracted;
+        window.__testCasesDirty = true;
         _renderTestCaseList();
         showToast(`从题目中检测到 ${extracted.length} 个测试用例`);
     }
@@ -797,6 +783,7 @@ function _onTestCaseFieldChange(el) {
     const field = el.dataset.tcField;
     if (idx >= 0 && idx < window.__testCases.length && field) {
         window.__testCases[idx][field] = el.value;
+        window.__testCasesDirty = true;
     }
 }
 
@@ -819,6 +806,7 @@ function addTestCase() {
         stdin: '',
         expected_output: '',
     });
+    window.__testCasesDirty = true;
     _renderTestCaseList();
     switchTab('cases');
     // 聚焦到新用例的第一个 textarea
@@ -838,6 +826,7 @@ function addTestCase() {
 function deleteTestCase(index) {
     if (index < 0 || index >= window.__testCases.length) return;
     window.__testCases.splice(index, 1);
+    window.__testCasesDirty = true;
     _renderTestCaseList();
 }
 

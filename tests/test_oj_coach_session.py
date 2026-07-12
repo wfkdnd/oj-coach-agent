@@ -38,6 +38,7 @@ def test_set_problem_text_falls_back_to_rule_cases():
     assert status["analysis_result_set"] is True
     assert status["runnable_case_count"] == 1
     assert status["test_case_sources"] == {"题目": 1}
+    assert status["test_cases"][0]["expected_output"] == "3"
 
 
 def test_set_code_auto_runs_existing_problem_case():
@@ -125,3 +126,26 @@ def test_build_question_context_falls_back_when_context_provider_empty():
 
     assert "用户问题" in context
     assert "print(1)" in context
+
+
+def test_summary_explanation_includes_compressed_context_snapshot():
+    class CapturingLLM:
+        def __init__(self):
+            self.messages = []
+
+        def chat(self, messages, **kwargs):
+            self.messages = messages
+            return "复盘完成"
+
+    llm = CapturingLLM()
+    session = OJCoachSession(
+        llm_factory=lambda: llm,
+        context_provider=lambda purpose: f"上下文快照：{purpose}",
+    )
+
+    result = session.explain_summary('{"运行状态":"accepted"}', "关注边界")
+
+    assert result == "复盘完成"
+    prompt = llm.messages[-1]["content"]
+    assert "阶段 6/7 上下文快照" in prompt
+    assert "上下文快照：" in prompt

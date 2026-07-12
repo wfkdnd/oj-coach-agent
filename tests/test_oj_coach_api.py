@@ -127,6 +127,20 @@ def test_compress_command_generates_context_snapshot():
     assert "A+B" in context["snapshot"]["problem_summary"]
 
 
+def test_english_compress_command_alias_generates_snapshot():
+    store = _make_store(auto_run=False)
+    session_id = store.create_session()["session_id"]
+    store.execute_command(
+        session_id,
+        ApiCommandRequest(command="paste_problem", input_text=PROBLEM),
+    )
+
+    response = store.execute_command(session_id, ApiCommandRequest(raw="/compress"))
+
+    assert response.ok is True
+    assert response.data["context"]["snapshot"]["is_empty"] is False
+
+
 def test_ask_auto_compresses_before_llm_call_when_context_is_large():
     store = _make_store(auto_run=False)
     session_id = store.create_session()["session_id"]
@@ -173,6 +187,26 @@ def test_stream_response_is_serialized_without_generator_object():
     assert serialized["has_stream"] is True
     assert "stream" not in serialized
     assert "当前未能初始化 LLM" in "".join(response.stream)
+    description = store.describe_session(session_id)
+    events = store.recent_events(session_id, limit=20)
+    assert description["conversation_message_count"] == 2
+    assert any(event["type"] == "assistant_response" for event in events)
+
+
+def test_summary_checks_auto_compression_threshold():
+    store = _make_store(auto_run=False)
+    session_id = store.create_session()["session_id"]
+    store.execute_command(
+        session_id,
+        ApiCommandRequest(command="paste_problem", input_text="# 大题\n" + "长题面" * 5000),
+    )
+
+    store.execute_command(session_id, ApiCommandRequest(command="summary", args="检查边界"))
+
+    context = store.context_state(session_id)
+    events = store.recent_events(session_id, limit=20)
+    assert context["snapshot"]["is_empty"] is False
+    assert any(event["type"] == "context_auto_compressed" for event in events)
 
 
 def test_create_app_reports_missing_dependency_or_builds_app():

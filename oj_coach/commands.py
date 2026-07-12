@@ -342,7 +342,7 @@ HELP_TEXT = """\
   /run                        运行当前代码
   /ask                        多行输入追问，直到 END；需要 LLM 环境变量
   /summary [notes]            生成规则版复盘总结，并交给 LLM 做人话讲解
-  /压缩                       在前端/API 中手动压缩当前会话上下文
+  /compress                   手动压缩当前会话上下文（兼容 /压缩、/compact）
   /status                     查看当前状态
   /exit                       退出
 

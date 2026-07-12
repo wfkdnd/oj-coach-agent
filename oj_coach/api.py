@@ -26,6 +26,8 @@ from oj_coach.session import OJCoachSession
 
 LOCAL_API_TITLE = "OJ Coach Local API"
 AUTO_COMPRESS_MIN_NEW_EVENTS = 10
+MAX_CONVERSATION_MESSAGES = 40
+MAX_CONVERSATION_MESSAGE_CHARS = 12000
 
 
 class SessionNotFoundError(KeyError):
@@ -49,6 +51,9 @@ class ApiSessionRecord:
     created_at: str = field(default_factory=lambda: _now_iso())
     updated_at: str = field(default_factory=lambda: _now_iso())
     events: list[SessionEvent] = field(default_factory=list)
+    conversation_messages: list[dict[str, str]] = field(
+        default_factory=lambda: [{"role": "system", "content": "OJ Coach 刷题会话阅读日志"}]
+    )
     snapshot: ContextSnapshot = field(default_factory=ContextSnapshot)
     compressor: ContextCompressor = field(default_factory=ContextCompressor)
 
@@ -62,6 +67,20 @@ class ApiSessionRecord:
 
     def bind_context_provider(self) -> None:
         self.coach_session.context_provider = self.build_question_context
+
+    def add_conversation_message(self, role: str, content: str) -> None:
+        text = str(content or "").strip()
+        if not text:
+            return
+        if len(text) > MAX_CONVERSATION_MESSAGE_CHARS:
+            text = text[:MAX_CONVERSATION_MESSAGE_CHARS] + "\n…（内容已截断）"
+        self.conversation_messages.append({"role": role, "content": text})
+        # 始终保留 system 提示和最近对话，避免内存日志无限增长。
+        if len(self.conversation_messages) > MAX_CONVERSATION_MESSAGES + 1:
+            self.conversation_messages = [
+                self.conversation_messages[0],
+                *self.conversation_messages[-MAX_CONVERSATION_MESSAGES:],
+            ]
 
     def build_question_context(self, question: str) -> str:
         if self.snapshot.is_empty:
@@ -87,16 +106,24 @@ class LocalSessionStore:
         self._session_factory = session_factory or OJCoachSession
         self._records: dict[str, ApiSessionRecord] = {}
 
-    def create_session(self) -> dict[str, Any]:
-        session_id = uuid4().hex
+    def create_session(self, session_id: str | None = None) -> dict[str, Any]:
+        session_id = session_id or uuid4().hex
+        coach_session = self._session_factory()
         record = ApiSessionRecord(
             session_id=session_id,
-            router=OJCoachCommandRouter(self._session_factory()),
+            router=OJCoachCommandRouter(coach_session),
+            compressor=ContextCompressor(llm_factory=coach_session.llm_factory),
         )
         record.bind_context_provider()
         record.add_event("session_created", {"session_id": session_id})
         self._records[session_id] = record
         return self.describe_session(session_id)
+
+    def delete_session(self, session_id: str) -> bool:
+        return self._records.pop(session_id, None) is not None
+
+    def get_router(self, session_id: str) -> OJCoachCommandRouter:
+        return self._get_record(session_id).router
 
     def list_sessions(self) -> list[dict[str, Any]]:
         return [self.describe_session(session_id) for session_id in sorted(self._records)]
@@ -108,6 +135,7 @@ class LocalSessionStore:
             "created_at": record.created_at,
             "updated_at": record.updated_at,
             "event_count": len(record.events),
+            "conversation_message_count": max(0, len(record.conversation_messages) - 1),
             "context": self.context_state(session_id),
             "status": record.coach_session.status(),
         }
@@ -122,6 +150,7 @@ class LocalSessionStore:
         return {
             "session_id": session_id,
             "event_count": len(record.events),
+            "conversation_message_count": max(0, len(record.conversation_messages) - 1),
             "events_since_last_compress": _events_since_last_compress(record),
             "should_compress": record.compressor.should_compress(
                 record.events,
@@ -135,6 +164,7 @@ class LocalSessionStore:
         snapshot = record.compressor.compress(
             session_state=record.coach_session.state,
             events=record.events,
+            conversation_messages=record.conversation_messages,
             force=force,
         )
         record.snapshot = snapshot
@@ -155,6 +185,7 @@ class LocalSessionStore:
             snapshot = record.compressor.compress(
                 session_state=record.coach_session.state,
                 events=record.events,
+                conversation_messages=record.conversation_messages,
                 force=False,
             )
         except Exception as exc:
@@ -202,10 +233,22 @@ class LocalSessionStore:
                 data={"context": context},
             )
 
-        if command == "ask":
+        if command in {"ask", "summary"}:
             self.maybe_auto_compress_context(record)
 
+        conversation_input = ""
+        if command == "ask":
+            conversation_input = args.strip() or (request.input_text or "").strip()
+        elif command == "summary":
+            conversation_input = "/summary" + (f" {args.strip()}" if args.strip() else "")
+        if conversation_input:
+            record.add_conversation_message("user", conversation_input)
+
         response = record.router.execute(command, args, input_text=request.input_text)
+        if command == "ask" and response.stream is not None:
+            response.stream = _capture_stream_for_log(record, response.stream)
+        elif command == "summary" and response.output.strip():
+            record.add_conversation_message("assistant", response.output)
         record.add_event("command_executed", _command_event_payload(request, command, args, response))
         return response
 
@@ -398,6 +441,24 @@ def _command_event_payload(
         "output_chars": len(response.output),
         "has_stream": response.stream is not None,
     }
+
+
+def _capture_stream_for_log(
+    record: ApiSessionRecord,
+    stream: Iterator[str],
+) -> Iterator[str]:
+    """边流式返回边记录回答，供下一次阶段 7 压缩使用。"""
+    chunks: list[str] = []
+    try:
+        for chunk in stream:
+            text = str(chunk)
+            chunks.append(text)
+            yield text
+    finally:
+        answer = "".join(chunks).strip()
+        if answer:
+            record.add_conversation_message("assistant", answer)
+            record.add_event("assistant_response", {"output_chars": len(answer)})
 
 
 def _should_auto_compress(record: ApiSessionRecord) -> bool:

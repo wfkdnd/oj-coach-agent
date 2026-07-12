@@ -78,3 +78,54 @@ def test_should_compress_uses_event_count_or_state_size():
 
     large_state = OJCoachState(problem_text="x" * 1200)
     assert compressor.should_compress([], large_state) is True
+
+
+def test_build_llm_context_keeps_latest_code_and_run_outside_snapshot():
+    state = OJCoachState(
+        code="print('latest')",
+        language="python",
+        last_run_result='{"status":"accepted"}',
+    )
+    compressor = ContextCompressor()
+    snapshot = compressor.compress(state, [SessionEvent("command_executed", {"command": "run"})])
+
+    context = compressor.build_llm_context(snapshot, state, "继续分析")
+
+    assert "print('latest')" in context
+    assert '"status":"accepted"' in context
+    assert "继续分析" in context
+
+
+def test_context_compressor_uses_llm_and_falls_back_safely():
+    class FakeLLM:
+        def count_tokens(self, text):
+            return len(text)
+
+        def chat(self, messages, **kwargs):
+            return "LLM 生成的阶段 7 快照摘要"
+
+    state = OJCoachState(problem_text="# A+B")
+    compressor = ContextCompressor(llm_factory=lambda: FakeLLM())
+
+    snapshot = compressor.compress(
+        state,
+        [SessionEvent("command_executed", {"command": "ask"})],
+        conversation_messages=[
+            {"role": "system", "content": "刷题会话"},
+            {"role": "user", "content": "这题怎么做？"},
+        ],
+    )
+
+    assert snapshot.compression_mode == "LLM 摘要"
+    assert snapshot.conversation_summary == "LLM 生成的阶段 7 快照摘要"
+
+    class FailingLLM(FakeLLM):
+        def chat(self, messages, **kwargs):
+            raise RuntimeError("模型不可用")
+
+    fallback = ContextCompressor(llm_factory=lambda: FailingLLM()).compress(
+        state,
+        [SessionEvent("command_executed", {"command": "ask"})],
+    )
+    assert fallback.compression_mode == "规则摘要（LLM 回退）"
+    assert fallback.is_empty is False
