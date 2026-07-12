@@ -7,6 +7,12 @@ const state = {
     isStreaming: false,
     cmdHistory: [],
     cmdHistoryIdx: -1,
+    llmConfig: {
+        baseUrl: '',
+        model: '',
+        apiKeyConfigured: false,
+        reason: '',
+    },
 };
 
 // ── 命令历史 (localStorage) ──────────────────────────
@@ -51,14 +57,61 @@ async function checkLlmStatus() {
     try {
         const res = await fetch('/api/status/llm');
         const data = await res.json();
+        state.llmConfig = {
+            baseUrl: String(data.base_url || ''),
+            model: String(data.model || ''),
+            apiKeyConfigured: Boolean(data.api_key_configured),
+            reason: String(data.reason || ''),
+        };
+        _renderLlmConfigPopover();
         if (data.ok && data.llm_available) {
-            setBadge('llmBadge', `LLM: ${data.model}`, 'badge status-ok');
+            setBadge('llmBadge', `LLM: ${data.model}`, 'badge llm-badge-button status-ok');
         } else {
             const reason = data.reason || '未配置';
-            setBadge('llmBadge', `LLM: ${reason}`, 'badge status-err');
+            setBadge('llmBadge', `LLM: ${reason}`, 'badge llm-badge-button status-err');
         }
     } catch {
-        setBadge('llmBadge', 'LLM: 检测失败', 'badge status-err');
+        state.llmConfig.reason = '检测失败';
+        _renderLlmConfigPopover();
+        setBadge('llmBadge', 'LLM: 检测失败', 'badge llm-badge-button status-err');
+    }
+}
+
+function _renderLlmConfigPopover() {
+    const baseUrl = document.getElementById('llmConfigBaseUrl');
+    const apiKey = document.getElementById('llmConfigApiKey');
+    const model = document.getElementById('llmConfigModel');
+    const status = document.getElementById('llmConfigStatus');
+    if (!baseUrl || !apiKey || !model || !status) return;
+
+    baseUrl.value = state.llmConfig.baseUrl;
+    model.value = state.llmConfig.model;
+    // 这里只写入固定占位值，真实 API Key 从未由后端返回。
+    apiKey.value = state.llmConfig.apiKeyConfigured ? 'configured' : '';
+    apiKey.placeholder = state.llmConfig.apiKeyConfigured ? '' : '未配置';
+    status.textContent = state.llmConfig.reason || '配置读取成功';
+    status.classList.toggle('status-error', Boolean(state.llmConfig.reason));
+}
+
+function toggleLlmConfigPopover(event, forceOpen) {
+    if (event) event.stopPropagation();
+    const popover = document.getElementById('llmConfigPopover');
+    const badge = document.getElementById('llmBadge');
+    if (!popover || !badge) return;
+
+    const shouldOpen = typeof forceOpen === 'boolean'
+        ? forceOpen
+        : !popover.classList.contains('show');
+    popover.classList.toggle('show', shouldOpen);
+    badge.setAttribute('aria-expanded', String(shouldOpen));
+    if (shouldOpen) {
+        _renderLlmConfigPopover();
+        const rect = badge.getBoundingClientRect();
+        const popoverWidth = Math.min(390, window.innerWidth - 20);
+        const maxLeft = Math.max(10, window.innerWidth - popoverWidth - 10);
+        popover.style.top = `${rect.bottom + 8}px`;
+        popover.style.left = `${Math.min(Math.max(10, rect.left), maxLeft)}px`;
+        popover.style.right = 'auto';
     }
 }
 

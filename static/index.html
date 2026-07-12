@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OJ Coach Agent</title>
-    <link rel="stylesheet" href="/static/style.css?v=11">
+    <link rel="stylesheet" href="/static/style.css?v=12">
     <script type="importmap">
     {
         "imports": {
@@ -40,12 +40,33 @@
         </select>
         <label>超时 <input type="number" id="timeoutInput" value="3000" min="500" step="500" title="运行超时(ms)"></label>
         <span id="runStatus" class="badge">未运行</span>
-        <span id="llmBadge" class="badge">LLM: 检测中...</span>
+        <button id="llmBadge" class="badge llm-badge-button" type="button"
+                onclick="toggleLlmConfigPopover(event)" aria-haspopup="dialog" aria-expanded="false"
+                title="查看当前 LLM 配置">LLM: 检测中...</button>
         <button class="reading-log-toggle" id="readingLogBtn" onclick="toggleReadingLog()" title="查看阶段 6/7 阅读日志">
             阅读日志 <span id="readingLogCount">0</span>
         </button>
         <button class="theme-toggle" id="themeToggle" title="切换明暗主题">☽</button>
     </div>
+
+    <section class="llm-config-popover" id="llmConfigPopover" role="dialog"
+             aria-label="LLM 配置信息" onclick="event.stopPropagation()">
+        <div class="llm-config-header">
+            <strong>LLM 配置</strong>
+            <button type="button" onclick="toggleLlmConfigPopover(event, false)" title="关闭">✕</button>
+        </div>
+        <label>Base URL
+            <input id="llmConfigBaseUrl" type="text" readonly placeholder="未配置">
+        </label>
+        <label>API Key
+            <input id="llmConfigApiKey" type="password" readonly placeholder="未配置" autocomplete="off">
+        </label>
+        <label>Model
+            <input id="llmConfigModel" type="text" readonly placeholder="未配置">
+        </label>
+        <small id="llmConfigStatus">正在读取配置...</small>
+        <p>安全提示：真实 API Key 不会发送到前端，仅显示是否已配置。</p>
+    </section>
 
     <!-- 阶段 6/7：事件阅读日志与上下文快照 -->
     <div class="reading-log-backdrop" id="readingLogBackdrop" onclick="toggleReadingLog(false)"></div>
@@ -209,11 +230,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 
     <!-- 静态模块（按依赖顺序加载，均为全局函数） -->
-    <script src="/static/modules/session.js?v=11"></script>
-    <script src="/static/modules/chat.js?v=11"></script>
-    <script src="/static/modules/ui.js?v=11"></script>
-    <script src="/static/modules/theme.js?v=11"></script>
-    <script src="/static/app.js?v=11"></script>
+    <script src="/static/modules/session.js?v=12"></script>
+    <script src="/static/modules/chat.js?v=12"></script>
+    <script src="/static/modules/ui.js?v=12"></script>
+    <script src="/static/modules/theme.js?v=12"></script>
+    <script src="/static/app.js?v=12"></script>
 
     <!-- CodeMirror v6 ESM 导入（零构建步骤，CDN 加载） -->
     <script type="module">

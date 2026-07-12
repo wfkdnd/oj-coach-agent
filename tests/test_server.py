@@ -42,6 +42,17 @@ def _cleanup_session(session_id: str):
 # _parse_payload 单元测试
 # ═══════════════════════════════════════════════════════════════
 
+def test_llm_status_never_exposes_api_key():
+    """状态接口只能说明密钥是否配置，不能把真实密钥发送给浏览器。"""
+    response = client.get("/api/status/llm")
+    assert response.status_code == 200
+    data = response.json()
+    assert "api_key" not in data
+    assert isinstance(data["api_key_configured"], bool)
+    assert "base_url" in data
+    assert "model" in data
+
+
 def test_parse_payload_raw_command():
     """raw 格式：/status、/run、/help 等原生命令。"""
     cmd, args, intext = _parse_payload({"raw": "/status"})

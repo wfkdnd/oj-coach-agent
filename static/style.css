@@ -73,6 +73,74 @@ body {
 .toolbar .badge.status-ok { color: var(--success); }
 .toolbar .badge.status-err { color: var(--error); }
 
+.llm-badge-button {
+    border: 1px solid transparent;
+    font-family: var(--font-sans);
+    cursor: pointer;
+}
+
+.llm-badge-button:hover,
+.llm-badge-button[aria-expanded="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.llm-config-popover {
+    position: fixed;
+    z-index: 260;
+    display: none;
+    width: min(390px, calc(100vw - 20px));
+    padding: 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.3);
+}
+
+.llm-config-popover.show { display: grid; gap: 9px; }
+
+.llm-config-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--text-primary);
+}
+
+.llm-config-header button {
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.llm-config-popover label {
+    display: grid;
+    gap: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.llm-config-popover input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+}
+
+.llm-config-popover small { color: var(--success); }
+.llm-config-popover small.status-error { color: var(--warning); }
+
+.llm-config-popover p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
 .toolbar select, .toolbar input[type="number"] {
     background: var(--bg-input);
     color: var(--text-primary);
@@ -1280,9 +1348,15 @@ body {
     font-size: 13px;
     line-height: 1.7;
     color: var(--text-primary);
-    white-space: pre-wrap;
     font-family: var(--font-sans);
     user-select: text;
+}
+
+.float-panel-body .markdown-body { white-space: normal; }
+.float-panel-body .float-test-case + hr { margin: 1.1em 0; }
+.float-panel-body .test-case-empty {
+    color: var(--text-muted);
+    font-style: italic;
 }
 
 .float-panel-resize {

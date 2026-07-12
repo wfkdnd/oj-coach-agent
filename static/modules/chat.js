@@ -47,13 +47,32 @@ async function normalCommand(payload) {
         addSystemMsg(msg);
     }
     if (data.output) {
-        addResultMsg(data.output);
+        addResultMsg(_formatFrontendCommandOutput(payload, data.output));
     }
     await refreshStatus();
     if (typeof _isReadingLogOpen === 'function' && _isReadingLogOpen()) {
         await loadReadingLog();
     }
     return data;
+}
+
+/**
+ * 在线复盘和运行分析仍完整展示，只去掉面向实现的 LLM 分段标题。
+ * 离线时的“规则版复盘”没有这些标题，因此保持原样。
+ */
+function _formatFrontendCommandOutput(payload, output) {
+    const raw = String(payload && payload.raw || '').trim();
+    const command = String(
+        payload && payload.command || (raw.startsWith('/') ? raw.slice(1).split(/\s+/, 1)[0] : '')
+    ).toLowerCase();
+    let text = String(output ?? '');
+
+    if (command === 'run') {
+        text = text.replace(/^---\s*LLM\s*分析\s*---\s*\n?/m, '');
+    } else if (command === 'summary') {
+        text = text.replace(/^LLM\s*讲解版复盘[：:]\s*\n?/m, '');
+    }
+    return text;
 }
 
 // SSE 流式处理（含断线重连）

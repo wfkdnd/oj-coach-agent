@@ -141,16 +141,32 @@ function detachTab(tabName) {
     const panel = document.getElementById('floatPanel-' + tabName);
     if (!panel) return;
     let content = '';
+    let renderedHtml = '';
 
     if (tabName === 'problem') {
         content = _getEditorContent('problemInput');
+        if (content.trim() && typeof renderMarkdown === 'function') {
+            renderedHtml = renderMarkdown(content);
+        }
     } else if (tabName === 'cases') {
         const cases = window.__testCases || [];
-        content = cases.map((tc, i) => {
-            let s = `用例 ${i + 1}：\n输入：\n${tc.stdin}\n输出：\n${tc.expected_output}`;
-            if (i < cases.length - 1) s += '\n---\n';
-            return s;
-        }).join('\n');
+        content = cases.map((tc, i) => `用例 ${i + 1}: ${tc.expected_output || ''}`).join('\n');
+        if (cases.length && typeof renderCodeBlock === 'function') {
+            const blocks = cases.map((tc, i) => {
+                const safeName = typeof renderMarkdownInline === 'function'
+                    ? renderMarkdownInline(tc.name || `用例 ${i + 1}`)
+                    : `用例 ${i + 1}`;
+                const stdin = String(tc.stdin ?? '');
+                const expected = String(tc.expected_output ?? '');
+                const inputBlock = stdin
+                    ? renderCodeBlock('text', stdin)
+                    : '<p class="test-case-empty">（无输入）</p>';
+                return `<section class="float-test-case"><h3>${safeName}</h3>`
+                    + `<h4>输入</h4>${inputBlock}`
+                    + `<h4>期望输出</h4>${renderCodeBlock('text', expected)}</section>`;
+            }).join('<hr>');
+            renderedHtml = `<div class="markdown-body">${blocks}</div>`;
+        }
     }
 
     if (!content.trim()) {
@@ -158,7 +174,11 @@ function detachTab(tabName) {
         return;
     }
     const body = document.getElementById('floatBody-' + tabName);
-    if (body) body.textContent = content;
+    if (body) {
+        if (renderedHtml) body.innerHTML = renderedHtml;
+        else body.textContent = content;
+        if (typeof applyHighlight === 'function') applyHighlight(body);
+    }
     const def = _floatDefaults[tabName];
     panel.style.left = def.left + 'px';
     panel.style.top = def.top + 'px';
@@ -935,6 +955,9 @@ function initEvents() {
         }
         // Esc 关闭所有浮动面板
         if (e.key === 'Escape') {
+            if (typeof toggleLlmConfigPopover === 'function') {
+                toggleLlmConfigPopover(null, false);
+            }
             const anyOpen = document.querySelector('.float-panel[style*="display: flex"]');
             if (anyOpen) {
                 e.preventDefault();
@@ -943,6 +966,17 @@ function initEvents() {
                     closeFloatTab(tabName);
                 });
             }
+        }
+    });
+
+    // 点击配置窗外部时关闭，避免遮挡后续操作。
+    document.addEventListener('click', (e) => {
+        const popover = document.getElementById('llmConfigPopover');
+        const badge = document.getElementById('llmBadge');
+        if (popover && popover.classList.contains('show')
+            && !popover.contains(e.target) && !badge.contains(e.target)
+            && typeof toggleLlmConfigPopover === 'function') {
+            toggleLlmConfigPopover(null, false);
         }
     });
 
