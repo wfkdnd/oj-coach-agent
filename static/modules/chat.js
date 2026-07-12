@@ -66,6 +66,7 @@ async function streamCommand(payload) {
     const maxRetries = 2;
     let streamMsgEl = null;
     let textSpan = null;
+    let streamRawText = '';
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
@@ -110,19 +111,25 @@ async function streamCommand(payload) {
                     const lines = block.split('\n');
                     let eventType = '';
                     let data = '';
+                    let hasData = false;
 
                     for (const line of lines) {
                         if (line.startsWith('event: ')) {
                             eventType = line.substring(7).trim();
-                        } else if (line.startsWith('data: ')) {
-                            data += (data ? '\n' : '') + line.substring(6);
+                        } else if (line.startsWith('data:')) {
+                            let value = line.substring(5);
+                            if (value.startsWith(' ')) value = value.substring(1);
+                            data += (hasData ? '\n' : '') + value;
+                            hasData = true;
                         }
                     }
 
-                    if (eventType === 'token' && data) {
-                        textSpan.textContent += data;
+                    if (eventType === 'token' && hasData) {
+                        streamRawText += data;
+                        textSpan.innerHTML = renderMarkdown(streamRawText);
+                        applyHighlight(streamMsgEl);
                         scrollChat();
-                    } else if (eventType === 'result') {
+                    } else if (eventType === 'result' && hasData) {
                         try {
                             const result = JSON.parse(data);
                             for (const msg of (result.messages || [])) {
@@ -162,13 +169,14 @@ async function streamCommand(payload) {
         }
     }
 
-    if (streamMsgEl && textSpan && !textSpan.textContent.trim()) {
-        textSpan.textContent = '（未收到回答内容，请检查 LLM 配置或网络）';
+    if (streamMsgEl && textSpan && !streamRawText.trim()) {
+        streamRawText = '（未收到回答内容，请检查 LLM 配置或网络）';
+        textSpan.innerHTML = renderMarkdown(streamRawText);
     }
     if (streamMsgEl) {
         streamMsgEl.className = 'msg msg-assistant';
-        if (textSpan && textSpan.textContent.trim()) {
-            textSpan.innerHTML = renderMarkdown(textSpan.textContent);
+        if (textSpan && streamRawText.trim()) {
+            textSpan.innerHTML = renderMarkdown(streamRawText);
             applyHighlight(streamMsgEl);
         }
     }

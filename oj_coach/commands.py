@@ -149,15 +149,17 @@ class OJCoachCommandRouter:
         if not result.get("ok"):
             return CommandResponse(False, messages=messages, data=result)
 
-        output_parts = ["规则版复盘总结：\n" + str(result.get("rule_summary", ""))]
         llm_summary = str(result.get("llm_summary") or "").strip()
         if llm_summary:
-            output_parts.append("--- LLM 讲解版复盘 ---\n" + llm_summary)
+            output = "LLM 讲解版复盘：\n" + llm_summary
         else:
-            output_parts.append(
-                "当前未能初始化 LLM，仅展示规则版复盘。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。"
+            output = "\n\n".join(
+                [
+                    "当前未能初始化 LLM，仅展示规则版复盘。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。",
+                    "规则版复盘总结：\n" + str(result.get("rule_summary", "")),
+                ]
             )
-        return CommandResponse(True, messages=messages, output="\n\n".join(output_parts), data=result)
+        return CommandResponse(True, messages=messages, output=output, data=result)
 
 
 def parse_command_line(raw: str) -> ParsedCommand:
@@ -198,21 +200,20 @@ def _render_run_result(raw_result: str) -> str:
     except json.JSONDecodeError:
         return raw_result
 
-    lines = [
-        "运行结果：",
-        f"- 状态：{result.get('status', 'unknown')}",
-        f"- 耗时：{result.get('time_ms', 0)}ms",
-    ]
+    status = str(result.get("status", "unknown"))
+    lines = [_run_result_title(status), "", "| 项目 | 结果 |", "|---|---|"]
+    lines.append(f"| 状态 | `{_escape_markdown_table_cell(status)}` |")
+    lines.append(f"| 耗时 | `{_escape_markdown_table_cell(str(result.get('time_ms', 0)))}ms` |")
 
     if "case_count" in result:
         lines.append(
-            f"- 用例：{result.get('passed_count', 0)}/"
-            f"{result.get('case_count', 0)} 通过"
+            f"| 用例 | `{_escape_markdown_table_cell(str(result.get('passed_count', 0)))}/"
+            f"{_escape_markdown_table_cell(str(result.get('case_count', 0)))}` 通过 |"
         )
 
     explanation = _local_status_explanation(result)
     if explanation:
-        lines.append(f"- 说明：{explanation}")
+        lines.append(f"| 说明 | {_escape_markdown_table_cell(explanation)} |")
 
     for key, label in (
         ("compile_output", "编译输出"),
@@ -223,22 +224,68 @@ def _render_run_result(raw_result: str) -> str:
         value = str(result.get(key) or "").strip()
         if value:
             lines.append("")
-            lines.append(f"{label}：")
+            lines.append(f"#### {label}")
+            lines.append("")
+            lines.append("```text")
             lines.append(value)
+            lines.append("```")
 
     test_cases = result.get("test_cases")
     if test_cases:
         lines.append("")
-        lines.append("测试用例明细：")
+        lines.append("#### 测试用例明细")
+        lines.append("")
+        lines.append("| 用例 | 来源 | 状态 |")
+        lines.append("|---|---|---|")
         for index, item in enumerate(test_cases, start=1):
             if not isinstance(item, dict):
                 continue
+            case_name = str(item.get("name") or f"用例 {index}")
+            source = str(item.get("source") or "")
+            case_status = str(item.get("status") or "")
             lines.append(
-                f"{index}. {item.get('name', '')} "
-                f"[{item.get('source', '')}] -> {item.get('status', '')}"
+                f"| {_escape_markdown_table_cell(case_name)} "
+                f"| {_escape_markdown_table_cell(source)} "
+                f"| {_run_status_badge(case_status)} |"
             )
 
     return "\n".join(lines)
+
+
+def _run_result_title(status: str) -> str:
+    if status == "accepted":
+        return "### ✅ 运行通过"
+    if status == "wrong_answer":
+        return "### ❌ 答案错误"
+    if status == "compile_error":
+        return "### 🧱 编译失败"
+    if status == "runtime_error":
+        return "### 💥 运行异常"
+    if status == "time_limit_exceeded":
+        return "### ⏱️ 运行超时"
+    if status == "no_expected_output":
+        return "### ℹ️ 已运行，缺少期望输出"
+    return "### 运行结果"
+
+
+def _run_status_badge(status: str) -> str:
+    if status == "accepted":
+        return "✅ `accepted`"
+    if status == "wrong_answer":
+        return "❌ `wrong_answer`"
+    if status == "compile_error":
+        return "🧱 `compile_error`"
+    if status == "runtime_error":
+        return "💥 `runtime_error`"
+    if status == "time_limit_exceeded":
+        return "⏱️ `time_limit_exceeded`"
+    if not status:
+        return ""
+    return f"`{_escape_markdown_table_cell(status)}`"
+
+
+def _escape_markdown_table_cell(value: str) -> str:
+    return str(value).replace("|", "｜").replace("\n", "<br>")
 
 
 def _render_status(status: dict[str, Any]) -> str:

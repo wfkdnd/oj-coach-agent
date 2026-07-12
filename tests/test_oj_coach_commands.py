@@ -74,7 +74,7 @@ def test_router_executes_problem_code_and_renders_auto_run():
 
     assert problem_result.ok is True
     assert code_result.ok is True
-    assert "运行结果：" in code_result.output
+    assert "运行通过" in code_result.output
     assert "accepted" in code_result.output
 
 
@@ -99,6 +99,25 @@ def test_router_ask_returns_stream():
     assert "问题为空" in empty_result.output
     assert stream_result.stream is not None
     assert "当前未能初始化 LLM" in "".join(stream_result.stream)
+
+
+def test_router_summary_shows_only_llm_version_when_available():
+    class FakeLLM:
+        def chat(self, messages, **kwargs):
+            return "这是 LLM 讲解版"
+
+    session = OJCoachSession(llm_factory=lambda: FakeLLM(), auto_run=False)
+    session.state.problem_text = PROBLEM
+    session.state.language = "python"
+    session.state.code = PYTHON_AC_CODE
+    session.state.last_run_result = json.dumps({"status": "accepted", "time_ms": 1})
+    router = OJCoachCommandRouter(session)
+
+    result = router.execute("summary", "关注边界")
+
+    assert result.ok is True
+    assert "这是 LLM 讲解版" in result.output
+    assert "规则版复盘总结" not in result.output
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -143,7 +162,8 @@ def test_render_run_result_accepted():
         "passed_count": 3,
     })
     output = _render_run_result(raw)
-    assert "运行结果" in output
+    assert "运行通过" in output
+    assert "| 项目 | 结果 |" in output
     assert "accepted" in output
     assert "42ms" in output
     assert "3/3" in output
@@ -172,6 +192,7 @@ def test_render_run_result_with_compile_error():
     assert "compile_error" in output
     assert "SyntaxError" in output
     assert "编译输出" in output
+    assert "```text" in output
 
 
 def test_render_run_result_with_stderr():
@@ -210,6 +231,7 @@ def test_render_run_result_with_test_cases():
     assert "用例2" in output
     assert "wrong_answer" in output
     assert "测试用例明细" in output
+    assert "| 用例 | 来源 | 状态 |" in output
 
 
 def test_render_run_result_non_json():

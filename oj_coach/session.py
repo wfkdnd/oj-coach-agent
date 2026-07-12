@@ -174,12 +174,22 @@ class OJCoachSession:
 
         llm = self._try_create_llm()
         if llm is None:
+            fallback = self._build_rule_summary_fallback(question)
+            if fallback.get("ok"):
+                return _session_result(
+                    True,
+                    [],
+                    answer=fallback["answer"],
+                    rule_summary=fallback["rule_summary"],
+                    llm_available=False,
+                )
             return _session_result(
                 False,
                 [
                     "当前未能初始化 LLM。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。",
-                    "你仍然可以使用 /run 查看真实运行结果，或使用 /summary 生成规则版复盘。",
+                    *[str(message) for message in fallback.get("messages", [])],
                 ],
+                llm_available=False,
             )
 
         messages = [
@@ -201,7 +211,17 @@ class OJCoachSession:
 
         llm = self._try_create_llm()
         if llm is None:
-            yield "当前未能初始化 LLM。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。"
+            fallback = self._build_rule_summary_fallback(question)
+            if fallback.get("ok"):
+                yield str(fallback["answer"])
+            else:
+                messages = [str(message) for message in fallback.get("messages", [])]
+                yield "\n".join(
+                    [
+                        "当前未能初始化 LLM。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。",
+                        *messages,
+                    ]
+                )
             return
 
         messages = [
@@ -296,6 +316,23 @@ class OJCoachSession:
             return llm.chat(messages)
         except Exception as exc:
             return f"（LLM 复盘讲解生成失败：{exc}）"
+
+    def _build_rule_summary_fallback(self, notes: str = "") -> dict[str, Any]:
+        """LLM 不可用时，为 /ask 生成确定性的规则版复盘兜底。"""
+        result = self.summarize(notes)
+        if not result.get("ok"):
+            return _session_result(False, [str(message) for message in result.get("messages", [])])
+
+        rule_summary = str(result.get("rule_summary") or "").strip()
+        if not rule_summary:
+            return _session_result(False, ["规则版复盘为空，请确认题目、代码和运行结果是否完整。"])
+
+        answer = (
+            "当前未能初始化 LLM，仅展示规则版复盘总结。\n\n"
+            "## 规则版复盘总结\n\n"
+            f"```json\n{rule_summary}\n```"
+        )
+        return _session_result(True, [], answer=answer, rule_summary=rule_summary)
 
     def build_question_context(self, question: str) -> str:
         provided_context = self._get_provided_context(question)

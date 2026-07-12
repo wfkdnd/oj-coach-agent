@@ -600,10 +600,7 @@ body {
 
 .msg-result {
     background: var(--bg-tertiary);
-    font-family: var(--font-mono);
     font-size: 13px;
-    line-height: 1.7;
-    white-space: pre-wrap;
     border-left: 3px solid var(--info);
     padding: 10px 14px;
 }

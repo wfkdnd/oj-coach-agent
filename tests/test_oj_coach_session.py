@@ -106,6 +106,20 @@ def test_ask_reports_missing_llm():
     assert any("LLM" in message for message in result["messages"])
 
 
+def test_ask_falls_back_to_rule_summary_without_llm_when_ready():
+    session = _make_session()
+    session.set_problem_text(PROBLEM)
+    session.set_code(PYTHON_AC_CODE, "python")
+
+    result = session.ask("帮我复盘一下")
+
+    assert result["ok"] is True
+    assert result["llm_available"] is False
+    assert "规则版复盘总结" in result["answer"]
+    assert "```json" in result["answer"]
+    assert json.loads(result["rule_summary"])["运行状态"] == "accepted"
+
+
 def test_build_question_context_uses_context_provider_when_available():
     session = OJCoachSession(
         llm_factory=lambda: None,
