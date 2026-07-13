@@ -25,8 +25,6 @@ vector<long long> solveQueries(const string& s, const vector<pair<int, int>>& qu
     for (auto [left, right] : queries) {
         int len = right - left + 1;
 
-        // Logical bug: this keeps zero digits inside x, but the problem requires
-        // removing every zero before forming x.
         long long x = (prefixValue[right + 1] - prefixValue[left] * pow10[len]) % MOD;
         if (x < 0) {
             x += MOD;
