@@ -239,6 +239,21 @@ class OJCoachSession:
             yield f"\n（LLM 回答生成失败：{exc}）"
 
     def summarize(self, notes: str = "") -> dict[str, Any]:
+        result = self.summarize_rules(notes)
+        if not result.get("ok"):
+            return result
+
+        summary_result = str(result.get("rule_summary") or "")
+        llm_summary = self.explain_summary(summary_result, notes)
+        return _session_result(
+            True,
+            [str(message) for message in result.get("messages", [])],
+            rule_summary=summary_result,
+            llm_summary=llm_summary,
+        )
+
+    def summarize_rules(self, notes: str = "") -> dict[str, Any]:
+        """生成确定性的规则复盘，供同步调用和流式 LLM 讲解共同复用。"""
         if not self.state.problem_text.strip():
             return _session_result(False, ["请先使用 /paste_problem 或 /load_problem 读取题目。"])
         if not self.state.code.strip():
@@ -255,8 +270,7 @@ class OJCoachSession:
                 "notes": notes,
             },
         )
-        llm_summary = self.explain_summary(summary_result, notes)
-        return _session_result(True, [], rule_summary=summary_result, llm_summary=llm_summary)
+        return _session_result(True, [], rule_summary=summary_result)
 
     def status(self) -> dict[str, Any]:
         source_counts = _count_cases_by_source(self.state.test_cases)
@@ -316,6 +330,44 @@ class OJCoachSession:
             return llm.chat(messages)
         except Exception as exc:
             return f"（LLM 复盘讲解生成失败：{exc}）"
+
+    def explain_summary_stream(
+        self,
+        summary_result: str,
+        notes: str = "",
+    ) -> Iterator[str] | None:
+        """创建复盘讲解流；LLM 不可用时返回 None 以保留规则复盘兜底。"""
+        llm = self._try_create_llm()
+        if llm is None:
+            return None
+
+        summary_prompt = self.build_summary_explanation_prompt(summary_result, notes)
+        compressed_context = self._get_provided_context("请结合当前上下文快照生成复盘讲解。")
+        if compressed_context:
+            summary_prompt += f"""\
+
+阶段 6/7 上下文快照与最新状态：
+{compressed_context}
+"""
+        messages = [
+            {"role": "system", "content": OJ_COACH_SYSTEM_PROMPT},
+            {"role": "user", "content": summary_prompt},
+        ]
+
+        def generate() -> Iterator[str]:
+            try:
+                yielded = False
+                for chunk in llm.chat_stream(messages):
+                    text = str(chunk)
+                    if text:
+                        yielded = True
+                        yield text
+                if not yielded:
+                    yield "（LLM 未返回任何复盘内容，请检查模型是否可用或网络连接。）"
+            except Exception as exc:
+                yield f"\n（LLM 复盘讲解生成失败：{exc}）"
+
+        return generate()
 
     def _build_rule_summary_fallback(self, notes: str = "") -> dict[str, Any]:
         """LLM 不可用时，为 /ask 生成确定性的规则版复盘兜底。"""

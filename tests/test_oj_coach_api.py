@@ -1,6 +1,7 @@
 """测试 OJ Coach 本地 API 支撑层。"""
 
 import importlib.util
+import json
 import os
 import sys
 
@@ -191,6 +192,40 @@ def test_stream_response_is_serialized_without_generator_object():
     events = store.recent_events(session_id, limit=20)
     assert description["conversation_message_count"] == 2
     assert any(event["type"] == "assistant_response" for event in events)
+
+
+def test_summary_stream_is_recorded_for_context_compression():
+    class FakeLLM:
+        def chat_stream(self, messages, **kwargs):
+            yield "流式"
+            yield "复盘"
+
+    store = LocalSessionStore(
+        session_factory=lambda: OJCoachSession(
+            llm_factory=lambda: FakeLLM(),
+            auto_extract_with_llm=False,
+            auto_run=False,
+        )
+    )
+    session_id = store.create_session()["session_id"]
+    state = store._get_record(session_id).coach_session.state
+    state.problem_text = PROBLEM
+    state.language = "python"
+    state.code = PYTHON_AC_CODE
+    state.last_run_result = json.dumps({"status": "accepted", "time_ms": 1})
+
+    response = store.execute_command(
+        session_id,
+        ApiCommandRequest(command="summary", args="检查边界"),
+    )
+
+    assert response.stream is not None
+    assert "".join(response.stream) == "流式复盘"
+    assert store.describe_session(session_id)["conversation_message_count"] == 2
+    assert any(
+        event["type"] == "assistant_response"
+        for event in store.recent_events(session_id, limit=20)
+    )
 
 
 def test_summary_checks_auto_compression_threshold():

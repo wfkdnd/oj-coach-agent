@@ -144,21 +144,29 @@ class OJCoachCommandRouter:
         )
 
     def _execute_summary(self, args: str) -> CommandResponse:
-        result = self.session.summarize(args.strip())
+        notes = args.strip()
+        result = self.session.summarize_rules(notes)
         messages = [str(message) for message in result.get("messages", [])]
         if not result.get("ok"):
             return CommandResponse(False, messages=messages, data=result)
 
-        llm_summary = str(result.get("llm_summary") or "").strip()
-        if llm_summary:
-            output = "LLM 讲解版复盘：\n" + llm_summary
-        else:
-            output = "\n\n".join(
-                [
-                    "当前未能初始化 LLM，仅展示规则版复盘。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。",
-                    "规则版复盘总结：\n" + str(result.get("rule_summary", "")),
-                ]
+        rule_summary = str(result.get("rule_summary") or "")
+        summary_stream = self.session.explain_summary_stream(rule_summary, notes)
+        if summary_stream is not None:
+            return CommandResponse(
+                True,
+                messages=messages,
+                data=result,
+                stream=summary_stream,
+                stream_title="复盘：",
             )
+
+        output = "\n\n".join(
+            [
+                "当前未能初始化 LLM，仅展示规则版复盘。请确认 BASE_URL / API_KEY / MODEL_ID 已配置。",
+                "规则版复盘总结：\n" + rule_summary,
+            ]
+        )
         return CommandResponse(True, messages=messages, output=output, data=result)
 
 

@@ -245,7 +245,7 @@ class LocalSessionStore:
             record.add_conversation_message("user", conversation_input)
 
         response = record.router.execute(command, args, input_text=request.input_text)
-        if command == "ask" and response.stream is not None:
+        if command in {"ask", "summary"} and response.stream is not None:
             response.stream = _capture_stream_for_log(record, response.stream)
         elif command == "summary" and response.output.strip():
             record.add_conversation_message("assistant", response.output)

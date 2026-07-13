@@ -103,8 +103,9 @@ def test_router_ask_returns_stream():
 
 def test_router_summary_shows_only_llm_version_when_available():
     class FakeLLM:
-        def chat(self, messages, **kwargs):
-            return "这是 LLM 讲解版"
+        def chat_stream(self, messages, **kwargs):
+            yield "这是 LLM "
+            yield "讲解版"
 
     session = OJCoachSession(llm_factory=lambda: FakeLLM(), auto_run=False)
     session.state.problem_text = PROBLEM
@@ -116,8 +117,25 @@ def test_router_summary_shows_only_llm_version_when_available():
     result = router.execute("summary", "关注边界")
 
     assert result.ok is True
-    assert "这是 LLM 讲解版" in result.output
-    assert "规则版复盘总结" not in result.output
+    assert result.output == ""
+    assert result.stream is not None
+    assert "".join(result.stream) == "这是 LLM 讲解版"
+    assert result.stream_title == "复盘："
+
+
+def test_router_summary_keeps_rule_fallback_without_llm():
+    session = OJCoachSession(llm_factory=lambda: None, auto_run=False)
+    session.state.problem_text = PROBLEM
+    session.state.language = "python"
+    session.state.code = PYTHON_AC_CODE
+    session.state.last_run_result = json.dumps({"status": "accepted", "time_ms": 1})
+
+    result = OJCoachCommandRouter(session).execute("summary", "关注边界")
+
+    assert result.ok is True
+    assert result.stream is None
+    assert "仅展示规则版复盘" in result.output
+    assert "规则版复盘总结" in result.output
 
 
 # ═══════════════════════════════════════════════════════════════

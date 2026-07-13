@@ -41,6 +41,31 @@ def test_set_problem_text_falls_back_to_rule_cases():
     assert status["test_cases"][0]["expected_output"] == "3"
 
 
+def test_llm_test_case_extraction_accepts_stream_collected_json():
+    """LLM 客户端收集流式 JSON 后，题目样例仍应写入统一用例结构。"""
+    class FakeLLM:
+        def chat(self, messages, **kwargs):
+            return json.dumps(
+                {
+                    "test_cases": [
+                        {"stdin": "4 5", "expected_output": "9"},
+                        {"stdin": "", "expected_output": "YES"},
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+    session = OJCoachSession(llm_factory=lambda: FakeLLM(), auto_run=False)
+    result = session.set_problem_text("输出 4 与 5 的和，并额外输出 YES。")
+    status = session.status()
+
+    assert result["ok"] is True
+    assert status["runnable_case_count"] == 2
+    assert status["test_case_sources"] == {"题目": 2}
+    assert status["test_cases"][1]["stdin"] == ""
+    assert status["test_cases"][1]["expected_output"] == "YES"
+
+
 def test_set_code_auto_runs_existing_problem_case():
     session = _make_session()
     session.set_problem_text(PROBLEM)

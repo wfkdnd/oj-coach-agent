@@ -2,9 +2,42 @@
 
 import sys
 import os
+from types import SimpleNamespace
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from llm import LLMClient
+
+
+def _stream_chunk(*, content=None, reasoning_content=None):
+    delta = SimpleNamespace(content=content, reasoning_content=reasoning_content)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+
+def test_chat_uses_stream_request_and_collects_final_content():
+    """同步语义的 chat 也必须兼容只接受 stream=True 的云端接口。"""
+    calls = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            assert kwargs["stream"] is True
+            return iter(
+                [
+                    _stream_chunk(reasoning_content="内部思考"),
+                    _stream_chunk(content="最终"),
+                    _stream_chunk(content="答案"),
+                ]
+            )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions()),
+    )
+    llm = LLMClient.__new__(LLMClient)
+    llm.client = client
+    llm.model = "test-model"
+
+    assert llm.chat([{"role": "user", "content": "测试"}], stream=False) == "最终答案"
+    assert calls[0]["model"] == "test-model"
 
 
 def test_init():

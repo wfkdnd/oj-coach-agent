@@ -24,7 +24,10 @@ async function sendCommand() {
     const payload = isCommand ? { raw } : { command: 'ask', args: '', input_text: raw };
 
     try {
-        if ((isCommand && raw.startsWith('/ask')) || !isCommand) {
+        const commandName = isCommand
+            ? raw.slice(1).trim().split(/\s+/, 1)[0].toLowerCase()
+            : 'ask';
+        if (commandName === 'ask' || commandName === 'summary') {
             await streamCommand(payload);
         } else {
             await normalCommand(payload);
@@ -87,6 +90,22 @@ async function streamCommand(payload) {
     let textSpan = null;
     let streamRawText = '';
 
+    const ensureStreamMessage = (title = '') => {
+        const created = !streamMsgEl;
+        if (!streamMsgEl) {
+            streamMsgEl = document.createElement('div');
+            streamMsgEl.className = 'msg msg-streaming';
+            streamMsgEl.innerHTML = '<div class="msg-header"></div><div class="stream-text"></div>';
+            container.appendChild(streamMsgEl);
+            textSpan = streamMsgEl.querySelector('.stream-text');
+        }
+        const header = streamMsgEl.querySelector('.msg-header');
+        if (header && (created || title)) {
+            header.textContent = String(title || '回答').replace(/[：:]$/, '');
+        }
+        scrollChat();
+    };
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
             const retryPayload = (attempt > 0) ? { resume: true } : payload;
@@ -101,14 +120,7 @@ async function streamCommand(payload) {
             const decoder = new TextDecoder();
             let buffer = '';
 
-            if (!streamMsgEl) {
-                streamMsgEl = document.createElement('div');
-                streamMsgEl.className = 'msg msg-streaming';
-                streamMsgEl.innerHTML = '<div class="msg-header">回答</div><div class="stream-text"></div>';
-                container.appendChild(streamMsgEl);
-                scrollChat();
-                textSpan = streamMsgEl.querySelector('.stream-text');
-            } else {
+            if (streamMsgEl) {
                 const notice = streamMsgEl.querySelector('.reconnect-notice');
                 if (notice) notice.remove();
             }
@@ -144,6 +156,7 @@ async function streamCommand(payload) {
                     }
 
                     if (eventType === 'token' && hasData) {
+                        ensureStreamMessage();
                         streamRawText += data;
                         textSpan.innerHTML = renderMarkdown(streamRawText);
                         applyHighlight(streamMsgEl);
@@ -151,11 +164,14 @@ async function streamCommand(payload) {
                     } else if (eventType === 'result' && hasData) {
                         try {
                             const result = JSON.parse(data);
+                            if (result.has_stream) {
+                                ensureStreamMessage(result.stream_title || '回答');
+                            }
                             for (const msg of (result.messages || [])) {
                                 addSystemMsg(msg);
                             }
                             if (result.output) {
-                                addResultMsg(result.output);
+                                addResultMsg(_formatFrontendCommandOutput(payload, result.output));
                             }
                         } catch (e) { /* JSON 解析失败忽略 */ }
                     }

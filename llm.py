@@ -65,16 +65,40 @@ class LLMClient:
         return getattr(delta, "reasoning_content", None) or None
 
     def chat(self, messages: list[dict], **kwargs) -> str:
-        """非流式调用，返回完整回复文本。"""
+        """以流式请求调用模型，并在本地收集成完整回复文本。
+
+        云开发的 OpenAI 兼容接口拒绝 ``stream=False``。这里保留 ``chat``
+        的字符串返回契约，但发往服务端的请求始终是流式的，从而让结构化提取、
+        上下文压缩等需要完整文本的内部流程也能在云端运行。
+        """
+        kwargs.pop("stream", None)
+
         def _call():
             return self.client.chat.completions.create(
-                model=self.model, messages=messages, stream=False, **kwargs
+                model=self.model, messages=messages, stream=True, **kwargs
             )
         resp = _retry_with_backoff(_call)
-        return resp.choices[0].message.content or ""
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        for chunk in resp:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None)
+            reasoning = getattr(delta, "reasoning_content", None)
+            if content:
+                content_parts.append(content)
+            elif reasoning:
+                reasoning_parts.append(reasoning)
+
+        # 结构化任务优先使用最终 content，避免把思维过程混入 JSON；
+        # 某些模型只返回 reasoning_content 时再将其作为兼容兜底。
+        return "".join(content_parts or reasoning_parts)
 
     def chat_stream(self, messages: list[dict], **kwargs) -> Generator[str, None, None]:
         """流式调用，逐 chunk yield 文本片段。兼容 reasoning_content (思维链模型)。"""
+        kwargs.pop("stream", None)
+
         def _call():
             return self.client.chat.completions.create(
                 model=self.model, messages=messages, stream=True, **kwargs
