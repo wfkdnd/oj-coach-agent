@@ -76,7 +76,7 @@ def _build_problem_test_cases(samples: list[dict[str, str]]) -> list[dict[str, s
     for index, sample in enumerate(samples, start=1):
         stdin = sample.get("输入", "").strip()
         expected_output = sample.get("输出", "").strip()
-        if stdin or expected_output:
+        if expected_output:
             test_cases.append(
                 {
                     "名称": f"题目样例 {index}",
@@ -211,17 +211,25 @@ def _is_sample_output_heading(heading: str) -> bool:
 
 
 def _is_sample_explanation_heading(heading: str) -> bool:
-    return any(
-        marker in heading
-        for marker in (
-            "样例解释",
-            "样例说明",
-            "示例解释",
-            "示例说明",
-            "sample explanation",
-            "example explanation",
-            "explanation",
-        )
+    exact_headings = {
+        "样例解释",
+        "样例说明",
+        "示例解释",
+        "示例说明",
+        "解释",
+        "说明",
+        "提示",
+        "备注",
+        "sample explanation",
+        "example explanation",
+        "explanation",
+        "note",
+    }
+    if heading in exact_headings:
+        return True
+    return bool(
+        re.fullmatch(r"(?:样例|示例)\s*(?:解释|说明)(?:\s*\d+)?", heading)
+        or re.fullmatch(r"(?:sample|example)\s+explanation(?:\s+\d+)?", heading)
     )
 
 

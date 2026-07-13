@@ -1,0 +1,44 @@
+#include <bits/stdc++.h>
+using namespace std;
+
+static const long long MOD = 1000000007LL;
+
+int main() {
+    const int m = 200000;
+    const int q = 200000;
+    const string inputFile = "tle_stress.in";
+    const string outputFile = "tle_stress.out";
+
+    ofstream input(inputFile);
+    ofstream output(outputFile);
+    if (!input || !output) {
+        cerr << "failed to open output files\n";
+        return 1;
+    }
+
+    string s(m, '9');
+    input << s << '\n';
+    input << q << '\n';
+    for (int i = 0; i < q; ++i) {
+        input << 0 << ' ' << m - 1 << '\n';
+    }
+
+    long long x = 0;
+    for (int i = 0; i < m; ++i) {
+        x = (x * 10 + 9) % MOD;
+    }
+
+    long long digitSum = 9LL * m % MOD;
+    long long answer = x * digitSum % MOD;
+    for (int i = 0; i < q; ++i) {
+        if (i) {
+            output << ' ';
+        }
+        output << answer;
+    }
+    output << '\n';
+
+    cerr << "generated " << inputFile << " and " << outputFile << '\n';
+    return 0;
+}
+

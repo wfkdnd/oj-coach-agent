@@ -16,21 +16,12 @@ from pathlib import Path
 
 from oj_tools.analyze_problem import extract_problem_test_cases
 from oj_tools.compare_output import compare_output
+from oj_tools._shared import LANGUAGE_ALIASES, normalize_language, parse_case_heading, append_text
 
 
 DEFAULT_TIMEOUT_MS = 3000
 MAX_TIMEOUT_MS = 30000
 OUTPUT_LIMIT = 20000
-
-LANGUAGE_ALIASES = {
-    "py": "python",
-    "python": "python",
-    "python3": "python",
-    "cpp": "cpp",
-    "c++": "cpp",
-    "cc": "cpp",
-    "java": "java",
-}
 
 
 def run_oj_code(
@@ -44,7 +35,7 @@ def run_oj_code(
 ) -> str:
     """编译或运行 OJ 代码，并返回结构化运行结果 JSON 字符串。"""
     started_at = time.perf_counter()
-    normalized_language = _normalize_language(language)
+    normalized_language = normalize_language(language)
     safe_timeout_ms = _safe_timeout_ms(timeout_ms)
     runnable_cases = _collect_test_cases(problem_text, test_cases, stdin, expected_output)
 
@@ -275,13 +266,16 @@ def _build_result(
 ) -> dict:
     return {
         "status": status,
+        # 判题必须使用完整 stdout；公开结果仍使用下方的限长展示字段。
+        # 该私有字段只在 run_oj_code 内部流转，_to_json 不会暴露它。
+        "_raw_stdout": stdout,
         "stdout": _truncate_output(stdout),
         "stderr": _truncate_output(stderr),
         "exit_code": exit_code,
         "compile_output": _truncate_output(compile_output),
         "time_ms": time_ms,
-        "normalized_stdout": _normalize_output(stdout),
-        "normalized_expected_output": _normalize_output(expected_output),
+        "normalized_stdout": _truncate_output(_normalize_output(stdout)),
+        "normalized_expected_output": _truncate_output(_normalize_output(expected_output)),
         "timed_out": timed_out,
         "missing_command": missing_command,
     }
@@ -289,44 +283,48 @@ def _build_result(
 
 def _compare_and_decide(result: dict, expected_output: str) -> dict:
     """使用 compare_output 模块进行标准化对比，返回状态、标准化文本和差异描述。"""
+    raw_stdout = str(result.get("_raw_stdout", result.get("stdout", "")))
+    display_stdout = _truncate_output(_normalize_output(raw_stdout))
+    display_expected = _truncate_output(_normalize_output(expected_output))
+
     # 进程级别的状态优先于输出对比
     if result["status"] in {"compile_error", "time_limit_exceeded"}:
         return {
             "status": result["status"],
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
     if result.get("timed_out"):
         return {
             "status": "time_limit_exceeded",
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
     if result.get("missing_command"):
         return {
             "status": result["status"],
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
     if result.get("exit_code") not in (0, None):
         return {
             "status": "runtime_error",
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
 
-    # 委托给 compare_output 做输出层的精确对比
-    cmp_json = compare_output(stdout=result["stdout"], expected_output=expected_output, mode="trailing")
+    # 完整原始输出只用于判题；不能拿附带“已截断”提示的展示文本参与比较。
+    cmp_json = compare_output(stdout=raw_stdout, expected_output=expected_output, mode="trailing")
     cmp_result = json.loads(cmp_json)
     return {
         "status": cmp_result["status"],
-        "normalized_stdout": cmp_result.get("normalized_stdout", ""),
-        "normalized_expected_output": cmp_result.get("normalized_expected", ""),
-        "diff_info": cmp_result.get("diff_info", ""),
+        "normalized_stdout": _truncate_output(cmp_result.get("normalized_stdout", "")),
+        "normalized_expected_output": _truncate_output(cmp_result.get("normalized_expected", "")),
+        "diff_info": _truncate_output(cmp_result.get("diff_info", "")),
     }
 
 
@@ -407,19 +405,19 @@ def _parse_test_cases_text(text: str) -> list[dict[str, str]]:
     current_key = ""
 
     for line in text.splitlines():
-        heading_key, inline_value = _parse_case_heading(line)
+        heading_key, inline_value = parse_case_heading(line)
         if heading_key == "stdin":
             if current["stdin"] or current["expected_output"]:
                 cases.append(current)
                 current = {"name": "", "source": "用户添加", "stdin": "", "expected_output": ""}
             current_key = "stdin"
             if inline_value:
-                current[current_key] = _append_text(current[current_key], inline_value)
+                current[current_key] = append_text(current[current_key], inline_value)
             continue
         if heading_key == "expected_output":
             current_key = "expected_output"
             if inline_value:
-                current[current_key] = _append_text(current[current_key], inline_value)
+                current[current_key] = append_text(current[current_key], inline_value)
             continue
         if line.strip() in {"---", "==="}:
             if current["stdin"] or current["expected_output"]:
@@ -428,7 +426,7 @@ def _parse_test_cases_text(text: str) -> list[dict[str, str]]:
             current_key = ""
             continue
         if current_key:
-            current[current_key] = _append_text(current[current_key], line)
+            current[current_key] = append_text(current[current_key], line)
 
     if current["stdin"] or current["expected_output"]:
         cases.append(current)
@@ -436,23 +434,6 @@ def _parse_test_cases_text(text: str) -> list[dict[str, str]]:
     for index, item in enumerate(cases, start=1):
         item["name"] = item["name"] or f"用户添加 {index}"
     return cases
-
-
-def _parse_case_heading(line: str) -> tuple[str, str]:
-    stripped = line.strip().strip("#").strip()
-    if "：" in stripped:
-        raw_heading, inline_value = stripped.split("：", 1)
-    elif ":" in stripped:
-        raw_heading, inline_value = stripped.split(":", 1)
-    else:
-        raw_heading, inline_value = stripped, ""
-
-    heading = raw_heading.strip().lower()
-    if heading in {"输入", "stdin", "input"}:
-        return "stdin", inline_value.strip()
-    if heading in {"输出", "expected", "expected_output", "output"}:
-        return "expected_output", inline_value.strip()
-    return "", ""
 
 
 def _build_case_result(case: dict[str, str], result: dict) -> dict:
@@ -515,16 +496,6 @@ def _first_text(item: dict, keys: tuple[str, ...]) -> str:
         if value is not None:
             return str(value).replace("\r\n", "\n").replace("\r", "\n")
     return ""
-
-
-def _append_text(existing: str, line: str) -> str:
-    if not existing:
-        return line
-    return f"{existing}\n{line}"
-
-
-def _normalize_language(language: str) -> str:
-    return LANGUAGE_ALIASES.get(language.strip().lower(), "")
 
 
 def _safe_timeout_ms(timeout_ms: int) -> int:
