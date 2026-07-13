@@ -136,9 +136,22 @@ class OJCoachSession:
             )
 
         existing_cases = _extract_cases_from_json_text(self.state.test_cases)
-        self.state.test_cases = _serialize_cases(existing_cases + user_cases)
+        existing_keys = {_case_content_key(case) for case in existing_cases}
+        new_cases: list[dict[str, str]] = []
+        for case in user_cases:
+            key = _case_content_key(case)
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            new_cases.append(case)
+
+        if new_cases:
+            self.state.test_cases = _serialize_cases(existing_cases + new_cases)
+        duplicate_count = len(user_cases) - len(new_cases)
         message = (
-            f"已添加 {len(user_cases)} 组用户测试用例；当前共有 "
+            f"已添加 {len(new_cases)} 组用户测试用例"
+            + (f"，忽略 {duplicate_count} 组重复用例" if duplicate_count else "")
+            + "；当前共有 "
             f"{_count_runnable_cases_json(self.state.test_cases)} 组可运行用例。"
         )
         return _session_result(True, [message])
@@ -778,6 +791,15 @@ def _serialize_cases(cases: list[dict[str, str]]) -> str:
     if not normalized_cases:
         return ""
     return json.dumps({"test_cases": normalized_cases}, ensure_ascii=False, indent=2)
+
+
+def _case_content_key(case: dict[str, Any]) -> tuple[str, str]:
+    """按实际输入/期望输出识别重复用例，不受名称和来源标签影响。"""
+    stdin = _normalize_case_text(str(case.get("stdin", "")))
+    expected_output = _strip_explanation_tail(
+        _normalize_case_text(str(case.get("expected_output", "")))
+    )
+    return stdin, expected_output
 
 
 def _count_cases(cases: list[dict[str, str]]) -> int:

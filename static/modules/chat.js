@@ -274,14 +274,20 @@ async function submitCases() {
     if (typeof _syncTestCaseFields === 'function') _syncTestCaseFields();
     const cases = window.__testCases || [];
     if (cases.length === 0) { addErrorMsg('请先添加测试用例（可从题目中自动检测或手动添加）'); return; }
-    if (!cases.some(c => String(c.expected_output || '').trim())) {
+    // 题目样例已由 paste_problem 写入后端，不能再次作为用户用例提交。
+    const userCases = cases.filter(c => !String(c.source || '').trim().startsWith('题目'));
+    if (userCases.length === 0) {
+        addErrorMsg('当前没有需要提交的用户测试用例，请先点击“添加用例”。');
+        return;
+    }
+    if (!userCases.some(c => String(c.expected_output || '').trim())) {
         addErrorMsg('没有识别到可运行测试用例，请确认每组用例至少包含期望输出（输入可为空）。');
         return;
     }
     const text = (typeof _serializeTestCases === 'function')
-        ? _serializeTestCases()
+        ? _serializeTestCases(userCases)
         : JSON.stringify({
-            test_cases: cases.map(c => ({ stdin: c.stdin, expected_output: c.expected_output })),
+            test_cases: userCases.map(c => ({ stdin: c.stdin, expected_output: c.expected_output })),
         });
     const result = await normalCommand({ command: 'set_cases', args: '', input_text: text });
     if (result && result.ok) {

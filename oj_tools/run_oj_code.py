@@ -266,13 +266,16 @@ def _build_result(
 ) -> dict:
     return {
         "status": status,
+        # 判题必须使用完整 stdout；公开结果仍使用下方的限长展示字段。
+        # 该私有字段只在 run_oj_code 内部流转，_to_json 不会暴露它。
+        "_raw_stdout": stdout,
         "stdout": _truncate_output(stdout),
         "stderr": _truncate_output(stderr),
         "exit_code": exit_code,
         "compile_output": _truncate_output(compile_output),
         "time_ms": time_ms,
-        "normalized_stdout": _normalize_output(stdout),
-        "normalized_expected_output": _normalize_output(expected_output),
+        "normalized_stdout": _truncate_output(_normalize_output(stdout)),
+        "normalized_expected_output": _truncate_output(_normalize_output(expected_output)),
         "timed_out": timed_out,
         "missing_command": missing_command,
     }
@@ -280,44 +283,48 @@ def _build_result(
 
 def _compare_and_decide(result: dict, expected_output: str) -> dict:
     """使用 compare_output 模块进行标准化对比，返回状态、标准化文本和差异描述。"""
+    raw_stdout = str(result.get("_raw_stdout", result.get("stdout", "")))
+    display_stdout = _truncate_output(_normalize_output(raw_stdout))
+    display_expected = _truncate_output(_normalize_output(expected_output))
+
     # 进程级别的状态优先于输出对比
     if result["status"] in {"compile_error", "time_limit_exceeded"}:
         return {
             "status": result["status"],
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
     if result.get("timed_out"):
         return {
             "status": "time_limit_exceeded",
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
     if result.get("missing_command"):
         return {
             "status": result["status"],
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
     if result.get("exit_code") not in (0, None):
         return {
             "status": "runtime_error",
-            "normalized_stdout": _normalize_output(result["stdout"]),
-            "normalized_expected_output": _normalize_output(expected_output),
+            "normalized_stdout": display_stdout,
+            "normalized_expected_output": display_expected,
             "diff_info": "",
         }
 
-    # 委托给 compare_output 做输出层的精确对比
-    cmp_json = compare_output(stdout=result["stdout"], expected_output=expected_output, mode="trailing")
+    # 完整原始输出只用于判题；不能拿附带“已截断”提示的展示文本参与比较。
+    cmp_json = compare_output(stdout=raw_stdout, expected_output=expected_output, mode="trailing")
     cmp_result = json.loads(cmp_json)
     return {
         "status": cmp_result["status"],
-        "normalized_stdout": cmp_result.get("normalized_stdout", ""),
-        "normalized_expected_output": cmp_result.get("normalized_expected", ""),
-        "diff_info": cmp_result.get("diff_info", ""),
+        "normalized_stdout": _truncate_output(cmp_result.get("normalized_stdout", "")),
+        "normalized_expected_output": _truncate_output(cmp_result.get("normalized_expected", "")),
+        "diff_info": _truncate_output(cmp_result.get("diff_info", "")),
     }
 
 

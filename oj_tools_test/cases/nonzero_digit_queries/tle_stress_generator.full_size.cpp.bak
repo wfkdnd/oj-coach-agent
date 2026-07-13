@@ -1,26 +1,13 @@
-#include <iostream>
-#include <fstream>
-#include <string>
+#include <bits/stdc++.h>
 using namespace std;
 
 static const long long MOD = 1000000007LL;
 
-int main(int argc, char** argv) {
-    int m = 100;
-    int q = 10000;
+int main() {
+    const int m = 200000;
+    const int q = 200000;
     const string inputFile = "tle_stress.in";
     const string outputFile = "tle_stress.out";
-
-    if (argc >= 2) {
-        m = stoi(argv[1]);
-    }
-    if (argc >= 3) {
-        q = stoi(argv[2]);
-    }
-    if (m <= 0 || q <= 0) {
-        cerr << "m and q must be positive\n";
-        return 1;
-    }
 
     ofstream input(inputFile);
     ofstream output(outputFile);
@@ -51,7 +38,7 @@ int main(int argc, char** argv) {
     }
     output << '\n';
 
-    cerr << "generated " << inputFile << " and " << outputFile
-         << " with m=" << m << ", q=" << q << '\n';
+    cerr << "generated " << inputFile << " and " << outputFile << '\n';
     return 0;
 }
+

@@ -1033,6 +1033,17 @@ body {
     background: rgba(247, 118, 142, 0.12);
 }
 
+.tc-card-btn.tc-card-toggle {
+    width: auto;
+    padding: 1px 5px;
+    font-size: 11px;
+}
+
+.tc-card-btn.tc-card-toggle:hover {
+    color: var(--accent);
+    background: rgba(122, 162, 247, 0.12);
+}
+
 .tc-card-fields {
     display: flex;
     flex-direction: column;
@@ -1072,6 +1083,16 @@ body {
 
 .tc-field textarea:focus {
     border-color: var(--accent);
+}
+
+/* 仅超过 20 行的输入或输出默认限制高度；短用例始终完整展示。 */
+.tc-card.tc-card-collapsible:not(.expanded) .tc-field textarea {
+    max-height: 370px;
+    overflow-y: auto;
+}
+
+.tc-card.tc-card-collapsible.expanded .tc-field textarea {
+    max-height: none;
 }
 
 /* ── 添加用例按钮 ──────────────────────────────── */

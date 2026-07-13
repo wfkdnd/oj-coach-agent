@@ -94,6 +94,30 @@ def test_add_cases_and_run_code_without_auto_run():
     assert parsed["case_count"] == 1
 
 
+def test_add_cases_ignores_problem_and_repeated_user_duplicates():
+    session = _make_session(auto_run=False)
+    session.set_problem_text(PROBLEM)
+    submitted = json.dumps(
+        {
+            "test_cases": [
+                {"stdin": "1 2", "expected_output": "3"},
+                {"stdin": "5 7", "expected_output": "12"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    first = session.add_cases(submitted)
+    second = session.add_cases(submitted)
+    status = session.status()
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert "忽略 2 组重复用例" in second["messages"][0]
+    assert status["runnable_case_count"] == 2
+    assert status["test_case_sources"] == {"题目": 1, "用户": 1}
+
+
 def test_output_only_case_runs_without_stdin():
     session = _make_session(auto_run=False)
     session.set_code(PYTHON_NO_INPUT_CODE, "python")

@@ -560,6 +560,19 @@ function toggleProblemPreview() {
 /** 全局用例数据：{ name, source, stdin, expected_output }[] */
 window.__testCases = [];
 window.__testCasesDirty = false;
+const TEST_CASE_COLLAPSE_LINE_LIMIT = 20;
+
+function _testCaseTextLineCount(text) {
+    const normalized = String(text ?? '').replace(/\r\n?/g, '\n');
+    return normalized ? normalized.split('\n').length : 0;
+}
+
+function _isLongTestCase(testCase) {
+    return Math.max(
+        _testCaseTextLineCount(testCase && testCase.stdin),
+        _testCaseTextLineCount(testCase && testCase.expected_output),
+    ) > TEST_CASE_COLLAPSE_LINE_LIMIT;
+}
 
 /** 从题目文本中提取样例输入输出（客户端正则，复用后端 analyze_problem 逻辑） */
 function _extractTestCases(problemText) {
@@ -760,11 +773,20 @@ function _renderTestCaseList() {
         container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:16px;text-align:center;">暂无测试用例，提交题目可自动检测</div>';
         return;
     }
-    container.innerHTML = window.__testCases.map((tc, i) => `
-        <div class="tc-card">
+    container.innerHTML = window.__testCases.map((tc, i) => {
+        const isLong = _isLongTestCase(tc);
+        const expanded = isLong && Boolean(tc._expanded);
+        const toggleButton = isLong
+            ? `<button class="tc-card-btn tc-card-toggle" onclick="toggleTestCaseExpansion(${i})"
+                    aria-expanded="${expanded}" title="${expanded ? '收起长用例' : '展开长用例'}">${expanded ? '收起' : '展开'}</button>`
+            : '';
+        return `
+        <div class="tc-card${isLong ? ' tc-card-collapsible' : ''}${expanded ? ' expanded' : ''}"
+             data-tc-card-index="${i}">
             <div class="tc-card-header">
                 <span>${escapeHtml(tc.name)} <span class="tc-card-source">${escapeHtml(tc.source)}</span></span>
                 <div class="tc-card-actions">
+                    ${toggleButton}
                     <button class="tc-card-btn" onclick="deleteTestCase(${i})" title="删除此用例">✕</button>
                 </div>
             </div>
@@ -782,8 +804,8 @@ function _renderTestCaseList() {
                         oninput="_onTestCaseFieldInput(this)">${escapeHtml(tc.expected_output)}</textarea>
                 </div>
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 
     // 渲染后自动调整所有 textarea 高度
     setTimeout(() => {
@@ -811,6 +833,45 @@ function _onTestCaseFieldChange(el) {
 function _onTestCaseFieldInput(el) {
     _onTestCaseFieldChange(el);
     _autoResizeTcTextarea(el);
+    _applyTestCaseCollapseState(parseInt(el.dataset.tcIndex));
+}
+
+function _applyTestCaseCollapseState(index) {
+    const testCase = window.__testCases[index];
+    const container = document.getElementById('testCaseList');
+    const card = container && container.querySelector(`[data-tc-card-index="${index}"]`);
+    if (!testCase || !card) return;
+
+    const isLong = _isLongTestCase(testCase);
+    if (!isLong) testCase._expanded = false;
+    card.classList.toggle('tc-card-collapsible', isLong);
+    card.classList.toggle('expanded', isLong && Boolean(testCase._expanded));
+
+    const actions = card.querySelector('.tc-card-actions');
+    let toggle = card.querySelector('.tc-card-toggle');
+    if (isLong && !toggle && actions) {
+        toggle = document.createElement('button');
+        toggle.className = 'tc-card-btn tc-card-toggle';
+        toggle.type = 'button';
+        toggle.onclick = () => toggleTestCaseExpansion(index);
+        actions.insertBefore(toggle, actions.firstChild);
+    } else if (!isLong && toggle) {
+        toggle.remove();
+        toggle = null;
+    }
+    if (toggle) {
+        const expanded = Boolean(testCase._expanded);
+        toggle.textContent = expanded ? '收起' : '展开';
+        toggle.title = expanded ? '收起长用例' : '展开长用例';
+        toggle.setAttribute('aria-expanded', String(expanded));
+    }
+}
+
+function toggleTestCaseExpansion(index) {
+    const testCase = window.__testCases[index];
+    if (!testCase || !_isLongTestCase(testCase)) return;
+    testCase._expanded = !Boolean(testCase._expanded);
+    _applyTestCaseCollapseState(index);
 }
 
 function _syncTestCaseFields() {
@@ -851,10 +912,10 @@ function deleteTestCase(index) {
 }
 
 /** 将用例卡片数据序列化为提交格式（JSON） */
-function _serializeTestCases() {
+function _serializeTestCases(testCases = window.__testCases) {
     _syncTestCaseFields();
     return JSON.stringify({
-        test_cases: window.__testCases.map(tc => ({
+        test_cases: testCases.map(tc => ({
             stdin: tc.stdin,
             expected_output: tc.expected_output,
         })),
