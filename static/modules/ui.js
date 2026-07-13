@@ -185,6 +185,10 @@ function detachTab(tabName) {
     panel.style.width = def.width + 'px';
     panel.style.height = def.height + 'px';
     panel.style.display = 'flex';
+    // 面板显示后才能取得自动换行的真实高度。
+    if (body && typeof applyLongOutputCollapse === 'function') {
+        setTimeout(() => applyLongOutputCollapse(body), 0);
+    }
     // 标签栏标记为"已拖出"
     const btn = document.getElementById('tab' + tabName.charAt(0).toUpperCase() + tabName.slice(1));
     if (btn) btn.classList.add('detached');
@@ -532,6 +536,7 @@ function _renderProblemMarkdownPreview() {
     if (!preview || typeof renderMarkdown !== 'function') return;
     preview.innerHTML = renderMarkdown(_getEditorContent('problemInput'));
     if (typeof applyHighlight === 'function') applyHighlight(preview);
+    if (typeof applyLongOutputCollapse === 'function') applyLongOutputCollapse(preview);
 }
 
 function _setProblemPreview(enabled) {
@@ -560,18 +565,42 @@ function toggleProblemPreview() {
 /** 全局用例数据：{ name, source, stdin, expected_output }[] */
 window.__testCases = [];
 window.__testCasesDirty = false;
+window.__testCasesSyncing = false;
 const TEST_CASE_COLLAPSE_LINE_LIMIT = 20;
+
+function _isProblemTestCase(testCase) {
+    return String(testCase && testCase.source || '').trim().startsWith('题目');
+}
+
+function _isUserTestCase(testCase) {
+    const source = String(testCase && testCase.source || '').trim();
+    return source.startsWith('用户') || source.startsWith('手动');
+}
 
 function _testCaseTextLineCount(text) {
     const normalized = String(text ?? '').replace(/\r\n?/g, '\n');
     return normalized ? normalized.split('\n').length : 0;
 }
 
-function _isLongTestCase(testCase) {
-    return Math.max(
+function _isLongTestCase(testCase, card = null) {
+    const logicalLines = Math.max(
         _testCaseTextLineCount(testCase && testCase.stdin),
         _testCaseTextLineCount(testCase && testCase.expected_output),
-    ) > TEST_CASE_COLLAPSE_LINE_LIMIT;
+    );
+    if (logicalLines > TEST_CASE_COLLAPSE_LINE_LIMIT) return true;
+    if (!card) return false;
+    return Array.from(card.querySelectorAll('.tc-field textarea')).some(textarea =>
+        _renderedTextareaLineCount(textarea) > TEST_CASE_COLLAPSE_LINE_LIMIT
+    );
+}
+
+function _renderedTextareaLineCount(textarea) {
+    if (!textarea || !textarea.scrollHeight) return 0;
+    const style = window.getComputedStyle(textarea);
+    const fontSize = parseFloat(style.fontSize) || 12;
+    const lineHeight = parseFloat(style.lineHeight) || fontSize * 1.5;
+    const verticalPadding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    return Math.ceil(Math.max(0, textarea.scrollHeight - verticalPadding) / lineHeight);
 }
 
 /** 从题目文本中提取样例输入输出（客户端正则，复用后端 analyze_problem 逻辑） */
@@ -776,10 +805,19 @@ function _renderTestCaseList() {
     container.innerHTML = window.__testCases.map((tc, i) => {
         const isLong = _isLongTestCase(tc);
         const expanded = isLong && Boolean(tc._expanded);
+        const isProblemCase = _isProblemTestCase(tc);
+        const isUserCase = _isUserTestCase(tc);
         const toggleButton = isLong
             ? `<button class="tc-card-btn tc-card-toggle" onclick="toggleTestCaseExpansion(${i})"
                     aria-expanded="${expanded}" title="${expanded ? '收起长用例' : '展开长用例'}">${expanded ? '收起' : '展开'}</button>`
             : '';
+        const lockTitle = isProblemCase
+            ? '题目中的用例由题目内容维护，不能删除'
+            : '只有用户添加的用例可以删除';
+        const deleteControl = isUserCase
+            ? `<button class="tc-card-btn" onclick="deleteTestCase(${i})" title="删除此用户用例"
+                    ${window.__testCasesSyncing ? 'disabled' : ''}>✕</button>`
+            : `<span class="tc-card-lock" title="${lockTitle}" aria-label="此用例不可删除">🔒</span>`;
         return `
         <div class="tc-card${isLong ? ' tc-card-collapsible' : ''}${expanded ? ' expanded' : ''}"
              data-tc-card-index="${i}">
@@ -787,7 +825,7 @@ function _renderTestCaseList() {
                 <span>${escapeHtml(tc.name)} <span class="tc-card-source">${escapeHtml(tc.source)}</span></span>
                 <div class="tc-card-actions">
                     ${toggleButton}
-                    <button class="tc-card-btn" onclick="deleteTestCase(${i})" title="删除此用例">✕</button>
+                    ${deleteControl}
                 </div>
             </div>
             <div class="tc-card-fields">
@@ -807,9 +845,12 @@ function _renderTestCaseList() {
         </div>`;
     }).join('');
 
-    // 渲染后自动调整所有 textarea 高度
+    // 渲染后按真实宽度测量自动换行；超长单行也必须进入折叠状态。
     setTimeout(() => {
-        container.querySelectorAll('.tc-field textarea').forEach(_autoResizeTcTextarea);
+        container.querySelectorAll('[data-tc-card-index]').forEach(card => {
+            card.querySelectorAll('.tc-field textarea').forEach(_autoResizeTcTextarea);
+            _applyTestCaseCollapseState(Number(card.dataset.tcCardIndex));
+        });
     }, 0);
 }
 
@@ -842,7 +883,7 @@ function _applyTestCaseCollapseState(index) {
     const card = container && container.querySelector(`[data-tc-card-index="${index}"]`);
     if (!testCase || !card) return;
 
-    const isLong = _isLongTestCase(testCase);
+    const isLong = _isLongTestCase(testCase, card);
     if (!isLong) testCase._expanded = false;
     card.classList.toggle('tc-card-collapsible', isLong);
     card.classList.toggle('expanded', isLong && Boolean(testCase._expanded));
@@ -869,7 +910,9 @@ function _applyTestCaseCollapseState(index) {
 
 function toggleTestCaseExpansion(index) {
     const testCase = window.__testCases[index];
-    if (!testCase || !_isLongTestCase(testCase)) return;
+    const container = document.getElementById('testCaseList');
+    const card = container && container.querySelector(`[data-tc-card-index="${index}"]`);
+    if (!testCase || !card || !_isLongTestCase(testCase, card)) return;
     testCase._expanded = !Boolean(testCase._expanded);
     _applyTestCaseCollapseState(index);
 }
@@ -903,12 +946,44 @@ function addTestCase() {
     }, 100);
 }
 
-/** 删除用例 */
-function deleteTestCase(index) {
+/** 删除用户用例，并立即把完整用户用例集合精确同步到后端。 */
+async function deleteTestCase(index) {
     if (index < 0 || index >= window.__testCases.length) return;
-    window.__testCases.splice(index, 1);
+    const testCase = window.__testCases[index];
+    if (!_isUserTestCase(testCase)) {
+        showToast('只有用户添加的用例可以删除；题目用例请通过题目内容维护。', 'toast-warning');
+        return;
+    }
+    if (window.__testCasesSyncing) {
+        showToast('正在同步上一次用例修改，请稍候。', 'toast-warning');
+        return;
+    }
+
+    window.__testCasesSyncing = true;
+    const [removedCase] = window.__testCases.splice(index, 1);
     window.__testCasesDirty = true;
     _renderTestCaseList();
+
+    try {
+        const remainingUserCases = window.__testCases.filter(_isUserTestCase);
+        const result = await normalCommand({
+            command: 'replace_cases',
+            args: '',
+            input_text: _serializeTestCases(remainingUserCases),
+        });
+        if (!result || !result.ok) throw new Error('后端未接受用例同步请求');
+        window.__testCasesDirty = false;
+        await refreshStatus();
+    } catch (err) {
+        // 同步失败时恢复本地卡片，再读取一次后端状态，避免两端继续分叉。
+        window.__testCases.splice(Math.min(index, window.__testCases.length), 0, removedCase);
+        window.__testCasesDirty = false;
+        addErrorMsg(`删除用例未能同步：${err.message}`);
+        await refreshStatus();
+    } finally {
+        window.__testCasesSyncing = false;
+        _renderTestCaseList();
+    }
 }
 
 /** 将用例卡片数据序列化为提交格式（JSON） */
@@ -916,6 +991,7 @@ function _serializeTestCases(testCases = window.__testCases) {
     _syncTestCaseFields();
     return JSON.stringify({
         test_cases: testCases.map(tc => ({
+            name: tc.name,
             stdin: tc.stdin,
             expected_output: tc.expected_output,
         })),

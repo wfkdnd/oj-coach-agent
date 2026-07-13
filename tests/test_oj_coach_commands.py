@@ -89,6 +89,21 @@ def test_router_renders_status_and_timeout():
     assert "timeout_ms: 2000" in status_result.output
 
 
+def test_router_replace_cases_uses_exact_user_case_sync():
+    router = _make_router(auto_run=False)
+    router.execute("paste_problem", input_text=PROBLEM)
+    router.execute(
+        "set_cases",
+        input_text='{"test_cases": [{"stdin": "5 7", "expected_output": "12"}]}',
+    )
+
+    result = router.execute("replace_cases", input_text='{"test_cases": []}')
+    status = router.session.status()
+
+    assert result.ok is True
+    assert status["test_case_sources"] == {"题目": 1}
+
+
 def test_router_ask_returns_stream():
     router = _make_router()
 
@@ -178,6 +193,10 @@ def test_render_run_result_accepted():
         "time_ms": 42,
         "case_count": 3,
         "passed_count": 3,
+        "stdout": "不应显示的标准输出",
+        "test_cases": [
+            {"name": "通过用例", "source": "题目", "status": "accepted", "stdout": "42"},
+        ],
     })
     output = _render_run_result(raw)
     assert "运行通过" in output
@@ -185,6 +204,10 @@ def test_render_run_result_accepted():
     assert "accepted" in output
     assert "42ms" in output
     assert "3/3" in output
+    assert "标准输出" not in output
+    assert "不应显示的标准输出" not in output
+    assert "通过用例" in output
+    assert "测试用例明细" in output
 
 
 def test_render_run_result_wrong_answer():
@@ -236,20 +259,42 @@ def test_render_run_result_time_limit_exceeded():
 
 def test_render_run_result_with_test_cases():
     raw = json.dumps({
-        "status": "accepted",
+        "status": "wrong_answer",
         "time_ms": 15,
+        "case_count": 2,
+        "passed_count": 1,
         "test_cases": [
-            {"name": "示例1", "source": "题目", "status": "accepted"},
-            {"name": "用例2", "source": "用户", "status": "wrong_answer"},
+            {
+                "name": "已通过用例",
+                "source": "题目",
+                "status": "accepted",
+                "stdout": "不应展示的通过答案",
+            },
+            {
+                "name": "错误用例",
+                "source": "用户",
+                "status": "wrong_answer",
+                "stdin": "不应展示的输入",
+                "stdout": "错误答案正文",
+                "expected_output": "期望答案正文",
+                "diff_info": "第 1 行不一致",
+            },
         ],
     })
     output = _render_run_result(raw)
-    assert "示例1" in output
+    assert "已通过用例" in output
+    assert "不应展示的通过答案" not in output
+    assert "错误用例" in output
     assert "accepted" in output
-    assert "用例2" in output
     assert "wrong_answer" in output
-    assert "测试用例明细" in output
-    assert "| 用例 | 来源 | 状态 |" in output
+    assert "未通过用例详情" in output
+    assert "##### 用例 2" in output
+    assert "实际输出" in output
+    assert "期望输出" in output
+    assert "错误答案正文" in output
+    assert "期望答案正文" in output
+    assert "不应展示的输入" not in output
+    assert "第 1 行不一致" not in output
 
 
 def test_render_run_result_non_json():

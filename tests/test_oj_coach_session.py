@@ -118,6 +118,53 @@ def test_add_cases_ignores_problem_and_repeated_user_duplicates():
     assert status["test_case_sources"] == {"题目": 1, "用户": 1}
 
 
+def test_replace_user_cases_removes_backend_user_case_but_keeps_problem_case():
+    session = _make_session(auto_run=False)
+    session.set_problem_text(PROBLEM)
+    session.add_cases(
+        json.dumps(
+            {
+                "test_cases": [
+                    {"name": "用户一", "stdin": "5 7", "expected_output": "12"},
+                    {"name": "用户二", "stdin": "8 9", "expected_output": "17"},
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+    session.state.last_run_result = json.dumps({"status": "accepted"})
+
+    replaced = session.replace_user_cases(
+        json.dumps(
+            {"test_cases": [{"name": "用户二", "stdin": "8 9", "expected_output": "17"}]},
+            ensure_ascii=False,
+        )
+    )
+    status = session.status()
+
+    assert replaced["ok"] is True
+    assert status["test_case_sources"] == {"题目": 1, "用户": 1}
+    assert [case["stdin"] for case in status["test_cases"]] == ["1 2", "8 9"]
+    assert status["last_run_result_set"] is False
+
+    cleared = session.replace_user_cases('{"test_cases": []}')
+    status = session.status()
+
+    assert cleared["ok"] is True
+    assert status["test_case_sources"] == {"题目": 1}
+    assert status["test_cases"][0]["source"] == "题目"
+
+
+def test_replace_user_cases_rejects_invalid_payload_without_clearing_cases():
+    session = _make_session(auto_run=False)
+    session.add_cases('{"test_cases": [{"stdin": "1", "expected_output": "2"}]}')
+
+    result = session.replace_user_cases('{"unexpected": []}')
+
+    assert result["ok"] is False
+    assert session.status()["test_case_sources"] == {"用户": 1}
+
+
 def test_output_only_case_runs_without_stdin():
     session = _make_session(auto_run=False)
     session.set_code(PYTHON_NO_INPUT_CODE, "python")

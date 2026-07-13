@@ -1,6 +1,8 @@
 /* ── OJ Coach - 对话 & 命令模块 ────────────────────── */
 /* 依赖：session.js (state, saveToHistory, refreshStatus), ui.js (setSendDisabled, showToast, hideSuggestions) */
 
+const RUN_OUTPUT_COLLAPSE_LINE_LIMIT = 20;
+
 // ── 命令发送 ────────────────────────────────────────
 
 async function sendCommand() {
@@ -213,6 +215,7 @@ async function streamCommand(payload) {
         if (textSpan && streamRawText.trim()) {
             textSpan.innerHTML = renderMarkdown(streamRawText);
             applyHighlight(streamMsgEl);
+            applyLongOutputCollapse(streamMsgEl);
         }
     }
     state.isStreaming = false;
@@ -275,7 +278,7 @@ async function submitCases() {
     const cases = window.__testCases || [];
     if (cases.length === 0) { addErrorMsg('请先添加测试用例（可从题目中自动检测或手动添加）'); return; }
     // 题目样例已由 paste_problem 写入后端，不能再次作为用户用例提交。
-    const userCases = cases.filter(c => !String(c.source || '').trim().startsWith('题目'));
+    const userCases = cases.filter(c => typeof _isUserTestCase === 'function' && _isUserTestCase(c));
     if (userCases.length === 0) {
         addErrorMsg('当前没有需要提交的用户测试用例，请先点击“添加用例”。');
         return;
@@ -289,7 +292,8 @@ async function submitCases() {
         : JSON.stringify({
             test_cases: userCases.map(c => ({ stdin: c.stdin, expected_output: c.expected_output })),
         });
-    const result = await normalCommand({ command: 'set_cases', args: '', input_text: text });
+    // 用例编辑器提交的是当前用户用例全集，因此必须使用替换语义，才能同步删除和覆盖。
+    const result = await normalCommand({ command: 'replace_cases', args: '', input_text: text });
     if (result && result.ok) {
         window.__testCasesDirty = false;
         await refreshStatus();
@@ -314,7 +318,50 @@ function addMsg(type, header, text) {
     div.innerHTML = `<div class="msg-header">${header}</div>${rendered}`;
     container.appendChild(div);
     applyHighlight(div);
+    applyLongOutputCollapse(div);
     scrollChat();
+}
+
+/** 所有展示态代码块超过 20 行时默认折叠，短内容保持完整展示。 */
+function applyLongOutputCollapse(container) {
+    if (!container) return;
+    container.querySelectorAll('.code-block').forEach(block => {
+        if (block.classList.contains('long-output-collapsible')) return;
+        const code = block.querySelector('pre code');
+        if (!code) return;
+        const lineCount = _renderedOutputLineCount(code.parentElement, code.textContent);
+        if (lineCount <= RUN_OUTPUT_COLLAPSE_LINE_LIMIT) return;
+
+        block.classList.add('long-output-collapsible');
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'long-output-toggle';
+        toggle.textContent = '展开';
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.addEventListener('click', () => {
+            const expanded = block.classList.toggle('expanded');
+            toggle.textContent = expanded ? '收起' : '展开';
+            toggle.setAttribute('aria-expanded', String(expanded));
+        });
+        block.insertBefore(toggle, block.querySelector('pre'));
+    });
+}
+
+/**
+ * 同时统计逻辑换行和浏览器自动换行后的可见行数。
+ * 压力用例经常是一整行几十万字符，只数换行符会误判为短输出。
+ */
+function _renderedOutputLineCount(element, text) {
+    const normalized = String(text ?? '').replace(/\r\n?/g, '\n');
+    const logicalLines = normalized ? normalized.split('\n').length : 0;
+    if (!element || !element.scrollHeight) return logicalLines;
+
+    const style = window.getComputedStyle(element);
+    const fontSize = parseFloat(style.fontSize) || 12;
+    const lineHeight = parseFloat(style.lineHeight) || fontSize * 1.6;
+    const verticalPadding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    const renderedLines = Math.ceil(Math.max(0, element.scrollHeight - verticalPadding) / lineHeight);
+    return Math.max(logicalLines, renderedLines);
 }
 
 // ── 安全 Markdown 渲染 ──────────────────────────────

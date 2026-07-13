@@ -101,6 +101,9 @@ class OJCoachCommandRouter:
             return CommandResponse(True, output=DEPRECATED_SINGLE_CASE_TEXT)
         if command == "set_cases":
             return _render_session_result(self.session.add_cases(input_text or ""))
+        if command == "replace_cases":
+            # Web 用例编辑器使用精确同步语义；不加入公开命令帮助，避免和追加式 /set_cases 混淆。
+            return _render_session_result(self.session.replace_user_cases(input_text or ""))
         if command == "set_timeout":
             return self._execute_set_timeout(args)
         if command == "run":
@@ -223,31 +226,39 @@ def _render_run_result(raw_result: str) -> str:
     if explanation:
         lines.append(f"| 说明 | {_escape_markdown_table_cell(explanation)} |")
 
-    for key, label in (
-        ("compile_output", "编译输出"),
-        ("stderr", "标准错误"),
-        ("stdout", "标准输出"),
-        ("diff_info", "差异信息"),
-    ):
-        value = str(result.get(key) or "").strip()
-        if value:
-            lines.append("")
-            lines.append(f"#### {label}")
-            lines.append("")
-            lines.append("```text")
-            lines.append(value)
-            lines.append("```")
+    indexed_test_cases = [
+        (index, item)
+        for index, item in enumerate(result.get("test_cases", []), start=1)
+        if isinstance(item, dict)
+    ]
+    test_cases = [item for _, item in indexed_test_cases]
+    failed_cases = [
+        (index, item)
+        for index, item in indexed_test_cases
+        if str(item.get("status") or "") not in {"accepted", "no_expected_output"}
+    ]
 
-    test_cases = result.get("test_cases")
-    if test_cases:
+    # 批量判题的 stdout 是某个代表用例的展示值，不能放在总结果下，否则会让
+    # “全部通过”看起来仍有额外输出，也会在失败时重复展示同一个错误答案。
+    if not failed_cases:
+        for key, label in (("compile_output", "编译输出"), ("stderr", "标准错误")):
+            _append_run_text_block(lines, label, result.get(key))
+
+        # 没有期望输出时，stdout 本身就是用户需要查看的运行结果；真正判题通过时不展示。
+        if status == "no_expected_output":
+            _append_run_text_block(lines, "标准输出", result.get("stdout"), show_empty=True)
+        elif not test_cases and status != "accepted":
+            _append_run_text_block(lines, "实际输出", result.get("stdout"), show_empty=True)
+            _append_run_text_block(lines, "期望输出", result.get("normalized_expected_output"))
+            _append_run_text_block(lines, "差异信息", result.get("diff_info"))
+
+    if indexed_test_cases:
         lines.append("")
         lines.append("#### 测试用例明细")
         lines.append("")
         lines.append("| 用例 | 来源 | 状态 |")
         lines.append("|---|---|---|")
-        for index, item in enumerate(test_cases, start=1):
-            if not isinstance(item, dict):
-                continue
+        for index, item in indexed_test_cases:
             case_name = str(item.get("name") or f"用例 {index}")
             source = str(item.get("source") or "")
             case_status = str(item.get("status") or "")
@@ -257,7 +268,30 @@ def _render_run_result(raw_result: str) -> str:
                 f"| {_run_status_badge(case_status)} |"
             )
 
+    if failed_cases:
+        lines.append("")
+        lines.append("#### 未通过用例详情")
+        for case_number, item in failed_cases:
+            lines.append("")
+            lines.append(f"##### 用例 {case_number}")
+            _append_run_text_block(lines, "期望输出", item.get("expected_output"), show_empty=True)
+            _append_run_text_block(lines, "实际输出", item.get("stdout"), show_empty=True)
+
     return "\n".join(lines)
+
+
+def _append_run_text_block(
+    lines: list[str],
+    label: str,
+    raw_value: Any,
+    *,
+    show_empty: bool = False,
+) -> None:
+    """追加运行详情代码块；长内容由前端统一提供展开/收起控件。"""
+    value = str(raw_value or "").strip()
+    if not value and not show_empty:
+        return
+    lines.extend(["", f"###### {label}", "", "```text", value or "（无内容）", "```"])
 
 
 def _run_result_title(status: str) -> str:

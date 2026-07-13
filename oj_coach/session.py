@@ -156,6 +156,38 @@ class OJCoachSession:
         )
         return _session_result(True, [message])
 
+    def replace_user_cases(self, raw_cases: str) -> dict[str, Any]:
+        """精确同步用户用例，同时保护题目提取用例不被前端删除。"""
+        user_cases = _parse_user_case_replacement(raw_cases)
+        if user_cases is None:
+            return _session_result(False, ["用户测试用例同步失败：请求不是有效的用例 JSON。"])
+
+        existing_cases = _extract_cases_from_json_text(self.state.test_cases)
+        protected_cases = [
+            case
+            for case in existing_cases
+            if not _is_user_case_source(case.get("source"))
+        ]
+        seen_keys = {_case_content_key(case) for case in protected_cases}
+        replacement_cases: list[dict[str, str]] = []
+        for case in user_cases:
+            key = _case_content_key(case)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            replacement_cases.append(case)
+
+        self.state.test_cases = _serialize_cases(protected_cases + replacement_cases)
+        # 用例集合已经改变，旧运行结果不再代表当前状态。
+        self.state.last_run_result = ""
+        return _session_result(
+            True,
+            [
+                f"已同步 {len(replacement_cases)} 组用户测试用例；"
+                f"保留 {len(protected_cases)} 组题目或受保护测试用例。"
+            ],
+        )
+
     def set_timeout(self, timeout_ms: int | str) -> dict[str, Any]:
         try:
             value = int(timeout_ms)
@@ -714,6 +746,29 @@ def _parse_user_cases(text: str) -> list[dict[str, str]]:
     return _set_case_source(_parse_user_cases_text(text), "用户")
 
 
+def _parse_user_case_replacement(text: str) -> list[dict[str, str]] | None:
+    """解析前端精确同步请求；空数组合法，但缺失用例字段不能被当成清空请求。"""
+    json_text = _extract_json_text(text)
+    if not json_text:
+        return None
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError:
+        return None
+
+    if isinstance(payload, list):
+        raw_cases = payload
+    elif isinstance(payload, dict):
+        raw_cases = _first_present(payload, ("test_cases", "cases", "测试用例", "样例"))
+        if not isinstance(raw_cases, list):
+            return None
+    else:
+        return None
+
+    normalized = _normalize_case_items(raw_cases, default_source="用户")
+    return _set_case_source(normalized, "用户")
+
+
 def _parse_user_cases_text(text: str) -> list[dict[str, str]]:
     cases: list[dict[str, str]] = []
     current = {"name": "", "source": "用户", "stdin": "", "expected_output": ""}
@@ -800,6 +855,12 @@ def _case_content_key(case: dict[str, Any]) -> tuple[str, str]:
         _normalize_case_text(str(case.get("expected_output", "")))
     )
     return stdin, expected_output
+
+
+def _is_user_case_source(source: Any) -> bool:
+    """兼容当前及旧版用户来源标签，未知来源默认受保护。"""
+    normalized = str(source or "").strip()
+    return normalized.startswith("用户") or normalized.startswith("手动")
 
 
 def _count_cases(cases: list[dict[str, str]]) -> int:
