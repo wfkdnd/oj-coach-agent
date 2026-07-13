@@ -6,8 +6,8 @@ using namespace std;
 static const long long MOD = 1000000007LL;
 
 int main(int argc, char** argv) {
-    int m = 100;
-    int q = 10000;
+    int m = 50000;
+    int q = 50000;
     const string inputFile = "tle_stress.in";
     const string outputFile = "tle_stress.out";
 
