@@ -132,6 +132,12 @@ function updateUIFromStatus(status) {
     if (status.language && status.language !== '未设置') {
         document.getElementById('langSelect').value = status.language;
     }
+    const timeoutInput = document.getElementById('timeoutInput');
+    const timeoutMs = Number(status.timeout_ms);
+    if (timeoutInput && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        // 命令行 /set_timeout 和顶部输入框共享后端状态，刷新后以后端值为准。
+        timeoutInput.value = String(timeoutMs);
+    }
     const runBadge = document.getElementById('runStatus');
     if (status.last_run_result_set) {
         runBadge.textContent = '已运行';
