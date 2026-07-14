@@ -193,8 +193,8 @@ if STATIC_DIR.exists() and any(STATIC_DIR.iterdir()):
 
 # ── 启动入口 ───────────────────────────────────────────────
 
-def main(host: str = "127.0.0.1", port: int = 8866) -> None:
-    """启动 WebUI，本地默认只监听 loopback 地址。"""
+def main(host: str = "0.0.0.0", port: int = 8866) -> None:
+    """启动 WebUI；云开发代理需要监听所有容器网卡。"""
     import uvicorn
 
     print("OJ Coach Agent WebUI 启动中...")
