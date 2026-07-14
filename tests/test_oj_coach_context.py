@@ -129,3 +129,28 @@ def test_context_compressor_uses_llm_and_falls_back_safely():
     )
     assert fallback.compression_mode == "规则摘要（LLM 回退）"
     assert fallback.is_empty is False
+
+
+def test_context_compressor_initializes_llm_only_when_compression_is_needed():
+    factory_calls = []
+
+    class FakeLLM:
+        def count_tokens(self, text):
+            return len(text)
+
+        def chat(self, messages, **kwargs):
+            return "延迟初始化后的摘要"
+
+    compressor = ContextCompressor(
+        llm_factory=lambda: factory_calls.append("created") or FakeLLM(),
+        max_events_before_compress=10,
+        max_chars_before_compress=1000,
+    )
+    state = OJCoachState(problem_text="# A+B")
+
+    compressor.compress(state, [], force=False)
+    assert factory_calls == []
+
+    snapshot = compressor.compress(state, [], force=True)
+    assert factory_calls == ["created"]
+    assert snapshot.compression_mode == "LLM 摘要"

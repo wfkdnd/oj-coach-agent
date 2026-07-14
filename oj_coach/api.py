@@ -162,7 +162,7 @@ class LocalSessionStore:
         record.bind_context_provider()
         record.add_event("session_created", {"session_id": session_id})
         self._records[session_id] = record
-        return self.describe_session(session_id)
+        return self.session_summary(session_id)
 
     def delete_session(self, session_id: str) -> bool:
         return self._records.pop(session_id, None) is not None
@@ -171,7 +171,20 @@ class LocalSessionStore:
         return self._get_record(session_id).router
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        return [self.describe_session(session_id) for session_id in sorted(self._records)]
+        return [self.session_summary(session_id) for session_id in sorted(self._records)]
+
+    def session_summary(self, session_id: str) -> dict[str, Any]:
+        """返回顶部会话菜单所需的轻量信息，避免计算完整状态和上下文。"""
+
+        record = self._get_record(session_id)
+        state = record.coach_session.state
+        return {
+            "session_id": record.session_id,
+            "title": _session_title(state.problem_text, record.session_id),
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+            "language": state.language or "未设置",
+        }
 
     def describe_session(self, session_id: str) -> dict[str, Any]:
         record = self._get_record(session_id)
@@ -185,6 +198,22 @@ class LocalSessionStore:
             "conversation_message_count": max(0, len(record.conversation_messages) - 1),
             "context": self.context_state(session_id),
             "status": status,
+        }
+
+    def workspace_state(self, session_id: str) -> dict[str, Any]:
+        """返回切换会话时需要恢复的独立工作区状态。"""
+
+        record = self._get_record(session_id)
+        state = record.coach_session.state
+        status = record.coach_session.status()
+        return {
+            "session_id": session_id,
+            "problem_text": state.problem_text,
+            "language": state.language,
+            "code": state.code,
+            "test_cases": status.get("test_cases", []),
+            "last_run_result": state.last_run_result,
+            "timeout_ms": state.timeout_ms,
         }
 
     def recent_events(self, session_id: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -409,14 +438,13 @@ def create_app(
     def get_store() -> LocalSessionStore:
         return app.state.session_store
 
-    def get_or_404(session_id: str) -> dict[str, Any]:
+    def get_or_404(session_id: str) -> None:
         try:
-            description = get_store().describe_session(session_id)
+            get_store().get_router(session_id)
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if on_session_access is not None:
             on_session_access(session_id)
-        return description
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -428,7 +456,7 @@ def create_app(
         session_id = str(info["session_id"])
         if on_session_access is not None:
             on_session_access(session_id)
-        return {"ok": True, "session_id": session_id}
+        return {"ok": True, "session_id": session_id, "session": info}
 
     @app.get("/api/sessions")
     def list_sessions() -> dict[str, Any]:
@@ -444,7 +472,13 @@ def create_app(
 
     @app.get("/api/sessions/{session_id}/status")
     def get_status(session_id: str) -> dict[str, Any]:
-        return {"ok": True, "status": get_or_404(session_id)["status"]}
+        get_or_404(session_id)
+        return {"ok": True, "status": get_store().get_router(session_id).session.status()}
+
+    @app.get("/api/sessions/{session_id}/workspace")
+    def get_workspace(session_id: str) -> dict[str, Any]:
+        get_or_404(session_id)
+        return {"ok": True, "workspace": get_store().workspace_state(session_id)}
 
     @app.get("/api/sessions/{session_id}/events")
     def get_events(session_id: str, limit: int = 20) -> dict[str, Any]:
@@ -654,6 +688,16 @@ def _render_context_snapshot(context: dict[str, Any]) -> str:
         if value:
             lines.append(f"- {label}：{value}")
     return "\n".join(lines)
+
+
+def _session_title(problem_text: str, session_id: str) -> str:
+    """优先用题目首行命名，空会话使用短 ID。"""
+
+    for line in str(problem_text or "").splitlines():
+        title = line.strip().lstrip("#").strip()
+        if title:
+            return title[:36]
+    return f"会话 {session_id[:8]}"
 
 
 def _jsonable(value: Any) -> Any:

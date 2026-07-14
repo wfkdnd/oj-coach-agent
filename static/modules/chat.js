@@ -25,6 +25,7 @@ async function sendCommand() {
 
     const payload = isCommand ? { raw } : { command: 'ask', args: '', input_text: raw };
 
+    const requestSessionId = state.sessionId;
     try {
         const commandName = isCommand
             ? raw.slice(1).trim().split(/\s+/, 1)[0].toLowerCase()
@@ -35,12 +36,13 @@ async function sendCommand() {
             await normalCommand(payload);
         }
     } catch (err) {
-        addErrorMsg(`请求失败：${err.message}`);
+        addSessionErrorMsg(requestSessionId, `请求失败：${err.message}`);
     }
 }
 
 async function normalCommand(payload) {
-    const url = `/api/sessions/${state.sessionId}/command`;
+    const requestSessionId = state.sessionId;
+    const url = `/api/sessions/${requestSessionId}/command`;
     const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -49,14 +51,22 @@ async function normalCommand(payload) {
     const data = await res.json();
 
     for (const msg of (data.messages || [])) {
-        addSystemMsg(msg);
+        addSessionSystemMsg(requestSessionId, msg);
     }
     if (data.output) {
-        addResultMsg(_formatFrontendCommandOutput(payload, data.output));
+        addSessionResultMsg(
+            requestSessionId,
+            _formatFrontendCommandOutput(payload, data.output),
+        );
     }
-    await refreshStatus();
-    if (typeof _isReadingLogOpen === 'function' && _isReadingLogOpen()) {
-        await loadReadingLog();
+    if (state.sessionId === requestSessionId) {
+        await refreshStatus();
+        if (typeof _isReadingLogOpen === 'function' && _isReadingLogOpen()) {
+            await loadReadingLog();
+        }
+    } else if (typeof invalidateSessionWorkspace === 'function') {
+        // 请求修改的是后台旧会话，回到该会话时应重新拉取最新题目/代码/用例。
+        invalidateSessionWorkspace(requestSessionId);
     }
     return data;
 }
@@ -271,6 +281,7 @@ function _getProblemText() {
 // ── 面板提交 ────────────────────────────────────────
 
 async function submitProblem() {
+    const requestSessionId = state.sessionId;
     _syncEditors();
     const text = _getProblemText().trim();
     if (!text) { addErrorMsg('请先输入题目文本'); return null; }
@@ -279,9 +290,8 @@ async function submitProblem() {
         _extractAndPopulateTestCases(text);
     }
     const result = await normalCommand({ command: 'paste_problem', args: '', input_text: text });
-    if (result && result.ok) {
+    if (result && result.ok && state.sessionId === requestSessionId) {
         window.__testCasesDirty = false;
-        await refreshStatus();
     }
     return result;
 }
@@ -295,6 +305,7 @@ async function submitCode() {
 }
 
 async function submitCases() {
+    const requestSessionId = state.sessionId;
     // 先从当前 DOM 同步，避免用户刚输入就点击提交时数据仍停留在旧值。
     if (typeof _syncTestCaseFields === 'function') _syncTestCaseFields();
     const cases = window.__testCases || [];
@@ -316,9 +327,8 @@ async function submitCases() {
         });
     // 用例编辑器提交的是当前用户用例全集，因此必须使用替换语义，才能同步删除和覆盖。
     const result = await normalCommand({ command: 'replace_cases', args: '', input_text: text });
-    if (result && result.ok) {
+    if (result && result.ok && state.sessionId === requestSessionId) {
         window.__testCasesDirty = false;
-        await refreshStatus();
     }
 }
 
@@ -329,8 +339,34 @@ function addUserMsg(text)   { addMsg('user', '你', text); }
 function addResultMsg(text) { addMsg('result', '结果', text); }
 function addErrorMsg(text)  { addMsg('error', '错误', text); }
 
+function addSessionSystemMsg(sessionId, text) {
+    _addSessionMsg(sessionId, 'system', '系统', text);
+}
+
+function addSessionResultMsg(sessionId, text) {
+    _addSessionMsg(sessionId, 'result', '结果', text);
+}
+
+function addSessionErrorMsg(sessionId, text) {
+    _addSessionMsg(sessionId, 'error', '错误', text);
+}
+
 function addMsg(type, header, text) {
     const container = document.getElementById('chatMessages');
+    _addMsgToContainer(container, type, header, text, true);
+}
+
+function _addSessionMsg(sessionId, type, header, text) {
+    const isCurrent = state.sessionId === sessionId;
+    const container = isCurrent
+        ? document.getElementById('chatMessages')
+        : state.sessionViews.get(sessionId)?.chat;
+    if (!container) return;
+    _addMsgToContainer(container, type, header, text, isCurrent);
+}
+
+function _addMsgToContainer(container, type, header, text, shouldScroll) {
+    if (!container) return;
     const div = document.createElement('div');
     div.className = `msg msg-${type}`;
     // 用户输入按纯文本展示；系统、结果、错误和回答均安全渲染 Markdown。
@@ -341,7 +377,7 @@ function addMsg(type, header, text) {
     container.appendChild(div);
     applyHighlight(div);
     applyLongOutputCollapse(div);
-    scrollChat();
+    if (shouldScroll) scrollChat();
 }
 
 /** 所有展示态代码块超过 20 行时默认折叠，短内容保持完整展示。 */
