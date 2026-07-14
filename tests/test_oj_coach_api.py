@@ -59,6 +59,69 @@ def test_store_creates_session_and_executes_status_command():
     assert store.describe_session(session_info["session_id"])["event_count"] == 2
 
 
+def test_session_list_uses_lightweight_summaries():
+    store = _make_store()
+    session_id = store.create_session()["session_id"]
+
+    sessions = store.list_sessions()
+
+    assert sessions == [store.session_summary(session_id)]
+    assert sessions[0]["title"].startswith("会话 ")
+    assert "status" not in sessions[0]
+    assert "context" not in sessions[0]
+
+
+def test_create_session_does_not_eagerly_initialize_llm():
+    llm_factory_calls = []
+    store = LocalSessionStore(
+        session_factory=lambda: OJCoachSession(
+            llm_factory=lambda: llm_factory_calls.append("created"),
+            auto_extract_with_llm=False,
+            auto_run=False,
+        )
+    )
+
+    store.create_session()
+
+    assert llm_factory_calls == []
+
+
+def test_store_keeps_session_workspaces_and_llm_contexts_isolated():
+    store = _make_store(auto_run=False)
+    first_id = store.create_session()["session_id"]
+    second_id = store.create_session()["session_id"]
+
+    store.execute_command(
+        first_id,
+        ApiCommandRequest(command="paste_problem", input_text=PROBLEM),
+    )
+    store.execute_command(
+        first_id,
+        ApiCommandRequest(command="paste_code", args="python", input_text=PYTHON_AC_CODE),
+    )
+    store.execute_command(
+        second_id,
+        ApiCommandRequest(command="paste_problem", input_text="# 仅输出\n输出：\nYES"),
+    )
+    first_answer = store.execute_command(
+        first_id,
+        ApiCommandRequest(command="ask", args="如何优化？"),
+    )
+    assert first_answer.stream is not None
+    "".join(first_answer.stream)
+
+    first_workspace = store.workspace_state(first_id)
+    second_workspace = store.workspace_state(second_id)
+
+    assert first_workspace["problem_text"] == PROBLEM.strip()
+    assert first_workspace["code"] == PYTHON_AC_CODE
+    assert second_workspace["problem_text"].startswith("# 仅输出")
+    assert second_workspace["code"] == ""
+    assert store.describe_session(first_id)["conversation_message_count"] == 2
+    assert store.describe_session(second_id)["conversation_message_count"] == 0
+    assert store.get_router(first_id).session is not store.get_router(second_id).session
+
+
 def test_store_executes_problem_code_and_run_commands():
     store = _make_store(auto_run=False)
     session_id = store.create_session()["session_id"]

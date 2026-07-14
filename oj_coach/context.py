@@ -96,10 +96,8 @@ class ContextCompressor:
     ):
         self.generic_context_manager = generic_context_manager
         self.snapshot_llm = getattr(generic_context_manager, "llm", None)
-        if self.generic_context_manager is None and llm_factory is not None:
-            self.snapshot_llm = self._try_create_llm(llm_factory)
-            if self.snapshot_llm is not None:
-                self.generic_context_manager = self._try_create_generic_manager(self.snapshot_llm)
+        self._llm_factory = llm_factory
+        self._llm_initialization_attempted = self.snapshot_llm is not None
         self.max_events_before_compress = max_events_before_compress
         self.max_chars_before_compress = max_chars_before_compress
 
@@ -120,6 +118,9 @@ class ContextCompressor:
     ) -> ContextSnapshot:
         should_compress = self.should_compress(events, session_state)
         mode = "规则摘要" if force or should_compress else "未达到阈值"
+        # 空会话创建时不加载 LLM 客户端和 tokenizer，首次真正压缩时再初始化。
+        if force or should_compress:
+            self._ensure_snapshot_llm()
         problem_summary = _summarize_problem(session_state)
         code_summary = _summarize_code(session_state)
         test_case_summary = _summarize_test_cases(session_state)
@@ -242,6 +243,16 @@ class ContextCompressor:
             return llm_factory()
         except Exception:
             return None
+
+    def _ensure_snapshot_llm(self) -> None:
+        if self.snapshot_llm is not None or self._llm_initialization_attempted:
+            return
+        self._llm_initialization_attempted = True
+        if self._llm_factory is None:
+            return
+        self.snapshot_llm = self._try_create_llm(self._llm_factory)
+        if self.snapshot_llm is not None and self.generic_context_manager is None:
+            self.generic_context_manager = self._try_create_generic_manager(self.snapshot_llm)
 
     def _try_create_generic_manager(self, llm: Any) -> Any | None:
         try:

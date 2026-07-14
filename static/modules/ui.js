@@ -969,6 +969,7 @@ function addTestCase() {
 
 /** 删除用户用例，并立即把完整用户用例集合精确同步到后端。 */
 async function deleteTestCase(index) {
+    const requestSessionId = state.sessionId;
     if (index < 0 || index >= window.__testCases.length) return;
     const testCase = window.__testCases[index];
     if (!_isUserTestCase(testCase)) {
@@ -993,17 +994,22 @@ async function deleteTestCase(index) {
             input_text: _serializeTestCases(remainingUserCases),
         });
         if (!result || !result.ok) throw new Error('后端未接受用例同步请求');
-        window.__testCasesDirty = false;
-        await refreshStatus();
+        if (state.sessionId === requestSessionId) window.__testCasesDirty = false;
     } catch (err) {
         // 同步失败时恢复本地卡片，再读取一次后端状态，避免两端继续分叉。
-        window.__testCases.splice(Math.min(index, window.__testCases.length), 0, removedCase);
-        window.__testCasesDirty = false;
-        addErrorMsg(`删除用例未能同步：${err.message}`);
-        await refreshStatus();
+        if (state.sessionId === requestSessionId) {
+            window.__testCases.splice(Math.min(index, window.__testCases.length), 0, removedCase);
+            window.__testCasesDirty = false;
+            addErrorMsg(`删除用例未能同步：${err.message}`);
+            await refreshStatus();
+        } else if (typeof invalidateSessionWorkspace === 'function') {
+            invalidateSessionWorkspace(requestSessionId);
+        }
     } finally {
-        window.__testCasesSyncing = false;
-        _renderTestCaseList();
+        if (state.sessionId === requestSessionId) {
+            window.__testCasesSyncing = false;
+            _renderTestCaseList();
+        }
     }
 }
 
@@ -1116,6 +1122,9 @@ function initEvents() {
             if (typeof toggleLlmConfigPopover === 'function') {
                 toggleLlmConfigPopover(null, false);
             }
+            if (typeof toggleSessionMenu === 'function') {
+                toggleSessionMenu(false);
+            }
             const anyOpen = document.querySelector('.float-panel[style*="display: flex"]');
             if (anyOpen) {
                 e.preventDefault();
@@ -1135,6 +1144,11 @@ function initEvents() {
             && !popover.contains(e.target) && !badge.contains(e.target)
             && typeof toggleLlmConfigPopover === 'function') {
             toggleLlmConfigPopover(null, false);
+        }
+        const sessionMenu = document.getElementById('sessionMenu');
+        if (sessionMenu && !sessionMenu.contains(e.target)
+            && typeof toggleSessionMenu === 'function') {
+            toggleSessionMenu(false);
         }
     });
 
@@ -1158,12 +1172,18 @@ function initEvents() {
         await normalCommand({ command: 'set_timeout', args: timeout });
     });
 
-    const sessionSwitcher = document.getElementById('sessionSwitcher');
-    if (sessionSwitcher) {
-        sessionSwitcher.addEventListener('change', () => {
-            const newSid = sessionSwitcher.value;
-            if (newSid === '__new__') createNewSession();
-            else if (newSid !== state.sessionId) switchSession(newSid);
+    const sessionMenuTrigger = document.getElementById('sessionMenuTrigger');
+    if (sessionMenuTrigger) {
+        sessionMenuTrigger.addEventListener('click', (event) => {
+            event.stopPropagation();
+            toggleSessionMenu();
+        });
+    }
+    const newSessionBtn = document.getElementById('newSessionBtn');
+    if (newSessionBtn) {
+        newSessionBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            void createNewSession();
         });
     }
 

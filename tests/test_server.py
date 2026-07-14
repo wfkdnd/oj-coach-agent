@@ -175,6 +175,23 @@ class TestSessionAPI:
         assert "language" in status
         _cleanup_session(sid)
 
+    def test_get_session_workspace_for_fast_switching(self):
+        sid = client.post("/api/sessions").json()["session_id"]
+        client.post(
+            f"/api/sessions/{sid}/command",
+            json={"command": "paste_code", "args": "python", "input_text": "print(1)"},
+        )
+
+        response = client.get(f"/api/sessions/{sid}/workspace")
+
+        assert response.status_code == 200
+        workspace = response.json()["workspace"]
+        assert workspace["session_id"] == sid
+        assert workspace["language"] == "python"
+        assert workspace["code"] == "print(1)"
+        assert workspace["timeout_ms"] > 0
+        _cleanup_session(sid)
+
     def test_get_nonexistent_session_404(self):
         resp = client.get("/api/sessions/nonexist123/status")
         assert resp.status_code == 404
