@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 from uuid import uuid4
 
 from oj_coach.commands import (
@@ -92,6 +92,51 @@ class ApiSessionRecord:
         )
 
 
+@dataclass
+class StreamCacheEntry:
+    """一次 SSE 请求的可回放结果。"""
+
+    result: dict[str, Any] | None = None
+    tokens: list[str] = field(default_factory=list)
+    done: bool = False
+    error: str = ""
+
+
+class StreamReplayCache:
+    """按 session_id + stream_id 保存 SSE 回放数据，避免重连串到旧回答。"""
+
+    def __init__(self):
+        self._entries: dict[tuple[str, str], StreamCacheEntry] = {}
+
+    def start(self, session_id: str, stream_id: str) -> StreamCacheEntry:
+        entry = StreamCacheEntry()
+        self._entries[(session_id, stream_id)] = entry
+        return entry
+
+    def get(self, session_id: str, stream_id: str) -> StreamCacheEntry | None:
+        return self._entries.get((session_id, stream_id))
+
+    def set_result(self, session_id: str, stream_id: str, result: dict[str, Any]) -> None:
+        entry = self._entries.setdefault((session_id, stream_id), StreamCacheEntry())
+        entry.result = _jsonable(result)
+
+    def append_token(self, session_id: str, stream_id: str, token: str) -> None:
+        entry = self._entries.setdefault((session_id, stream_id), StreamCacheEntry())
+        entry.tokens.append(str(token))
+
+    def mark_done(self, session_id: str, stream_id: str) -> None:
+        entry = self._entries.setdefault((session_id, stream_id), StreamCacheEntry())
+        entry.done = True
+
+    def mark_error(self, session_id: str, stream_id: str, error: str) -> None:
+        entry = self._entries.setdefault((session_id, stream_id), StreamCacheEntry())
+        entry.error = str(error)
+
+    def drop_session(self, session_id: str) -> None:
+        for key in [key for key in self._entries if key[0] == session_id]:
+            self._entries.pop(key, None)
+
+
 class LocalSessionStore:
     """本地内存 session 仓库。
 
@@ -130,14 +175,16 @@ class LocalSessionStore:
 
     def describe_session(self, session_id: str) -> dict[str, Any]:
         record = self._get_record(session_id)
+        status = record.coach_session.status()
         return {
             "session_id": record.session_id,
             "created_at": record.created_at,
             "updated_at": record.updated_at,
+            "language": status.get("language", "未设置"),
             "event_count": len(record.events),
             "conversation_message_count": max(0, len(record.conversation_messages) - 1),
             "context": self.context_state(session_id),
-            "status": record.coach_session.status(),
+            "status": status,
         }
 
     def recent_events(self, session_id: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -290,7 +337,41 @@ def serialize_command_response(response: CommandResponse) -> dict[str, Any]:
     }
 
 
-def create_app(store: LocalSessionStore | None = None):
+def parse_api_payload(payload: Mapping[str, Any]) -> tuple[str, str, str | None]:
+    """从 HTTP payload 中解析 command、args 和 input_text。"""
+
+    raw = str(payload.get("raw", "")).strip()
+    if raw:
+        try:
+            parsed = parse_command_line(raw)
+            return parsed.command, parsed.args, None
+        except CommandParseError:
+            return "ask", "", raw
+
+    command = str(payload.get("command", "")).strip().lower()
+    args = str(payload.get("args", "")).strip()
+    input_value = payload.get("input_text")
+    input_text = None if input_value is None else str(input_value)
+
+    if not command:
+        question = str(payload.get("question") or payload.get("text") or "").strip()
+        if question:
+            return "ask", "", question
+
+    return command, args, input_text
+
+
+def create_app(
+    store: LocalSessionStore | None = None,
+    *,
+    title: str = LOCAL_API_TITLE,
+    version: str = "0.2.0",
+    lifespan: Any | None = None,
+    enable_cors: bool = True,
+    stream_cache: StreamReplayCache | None = None,
+    on_session_access: Callable[[str], None] | None = None,
+    on_session_delete: Callable[[str], None] | None = None,
+):
     """创建 FastAPI app。
 
     当前运行环境可能尚未安装 FastAPI，所以依赖在这里延迟导入。真正启动 API
@@ -300,48 +381,42 @@ def create_app(store: LocalSessionStore | None = None):
     try:
         from fastapi import FastAPI, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
-        from fastapi.responses import StreamingResponse
-        from pydantic import BaseModel
+        from sse_starlette.sse import EventSourceResponse
     except ImportError as exc:
         raise RuntimeError(
             "缺少本地 API 依赖。请先安装 fastapi 和 uvicorn，例如："
-            "pip install fastapi \"uvicorn[standard]\""
+            "pip install fastapi \"uvicorn[standard]\" sse-starlette"
         ) from exc
 
     session_store = store or LocalSessionStore()
-    app = FastAPI(title=LOCAL_API_TITLE, version="0.2.0")
+    replay_cache = stream_cache or StreamReplayCache()
+    app_kwargs = {"title": title, "version": version}
+    if lifespan is not None:
+        app_kwargs["lifespan"] = lifespan
+    app = FastAPI(**app_kwargs)
     app.state.session_store = session_store
+    app.state.stream_cache = replay_cache
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    class CommandBody(BaseModel):
-        raw: str | None = None
-        command: str | None = None
-        args: str | None = None
-        input_text: str | None = None
+    if enable_cors:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     def get_store() -> LocalSessionStore:
         return app.state.session_store
 
     def get_or_404(session_id: str) -> dict[str, Any]:
         try:
-            return get_store().describe_session(session_id)
+            description = get_store().describe_session(session_id)
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    def to_api_request(body: CommandBody) -> ApiCommandRequest:
-        return ApiCommandRequest(
-            raw=body.raw or "",
-            command=body.command or "",
-            args=body.args or "",
-            input_text=body.input_text,
-        )
+        if on_session_access is not None:
+            on_session_access(session_id)
+        return description
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -349,20 +424,33 @@ def create_app(store: LocalSessionStore | None = None):
 
     @app.post("/api/sessions")
     def create_session() -> dict[str, Any]:
-        return get_store().create_session()
+        info = get_store().create_session()
+        session_id = str(info["session_id"])
+        if on_session_access is not None:
+            on_session_access(session_id)
+        return {"ok": True, "session_id": session_id}
 
     @app.get("/api/sessions")
     def list_sessions() -> dict[str, Any]:
-        return {"sessions": get_store().list_sessions()}
+        return {"ok": True, "sessions": get_store().list_sessions()}
+
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict[str, Any]:
+        get_store().delete_session(session_id)
+        replay_cache.drop_session(session_id)
+        if on_session_delete is not None:
+            on_session_delete(session_id)
+        return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/status")
     def get_status(session_id: str) -> dict[str, Any]:
-        return get_or_404(session_id)
+        return {"ok": True, "status": get_or_404(session_id)["status"]}
 
     @app.get("/api/sessions/{session_id}/events")
     def get_events(session_id: str, limit: int = 20) -> dict[str, Any]:
         get_or_404(session_id)
         return {
+            "ok": True,
             "session_id": session_id,
             "events": get_store().recent_events(session_id, limit=limit),
         }
@@ -370,27 +458,52 @@ def create_app(store: LocalSessionStore | None = None):
     @app.get("/api/sessions/{session_id}/context")
     def get_context(session_id: str) -> dict[str, Any]:
         get_or_404(session_id)
-        return get_store().context_state(session_id)
+        return {"ok": True, **get_store().context_state(session_id)}
 
     @app.post("/api/sessions/{session_id}/context/compress")
     def compress_context(session_id: str) -> dict[str, Any]:
         get_or_404(session_id)
-        return get_store().compress_context(session_id, force=True)
+        return {"ok": True, **get_store().compress_context(session_id, force=True)}
 
     @app.post("/api/sessions/{session_id}/command")
-    def execute_command(session_id: str, body: CommandBody) -> dict[str, Any]:
+    def execute_command(session_id: str, body: dict[str, Any]) -> dict[str, Any]:
         get_or_404(session_id)
-        response = get_store().execute_command(session_id, to_api_request(body))
+        command, args, input_text = parse_api_payload(body or {})
+        response = get_store().execute_command(
+            session_id,
+            ApiCommandRequest(command=command, args=args, input_text=input_text),
+        )
         return serialize_command_response(response)
 
     @app.post("/api/sessions/{session_id}/command/stream")
-    def execute_command_stream(session_id: str, body: CommandBody):
+    def execute_command_stream(session_id: str, body: dict[str, Any]):
         get_or_404(session_id)
-        response = get_store().execute_command(session_id, to_api_request(body))
-        return StreamingResponse(
-            _sse_response(response),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache"},
+        payload = body or {}
+        stream_id = str(payload.get("stream_id") or "").strip()
+        if payload.get("resume"):
+            if not stream_id:
+                raise HTTPException(status_code=400, detail="resume 需要 stream_id。")
+            cached = replay_cache.get(session_id, stream_id)
+            if cached is None:
+                raise HTTPException(status_code=409, detail="没有可恢复的流式缓存。")
+            return EventSourceResponse(_replay_sse_events(cached, stream_id))
+
+        if not stream_id:
+            stream_id = uuid4().hex
+        replay_cache.start(session_id, stream_id)
+
+        command, args, input_text = parse_api_payload(payload)
+        response = get_store().execute_command(
+            session_id,
+            ApiCommandRequest(command=command, args=args, input_text=input_text),
+        )
+        return EventSourceResponse(
+            _event_source_events(
+                response,
+                stream_id=stream_id,
+                cache=replay_cache,
+                session_id=session_id,
+            )
         )
 
     return app
@@ -409,19 +522,62 @@ def run_dev_server(host: str = "127.0.0.1", port: int = 8000) -> None:
     uvicorn.run(create_app(), host=host, port=port)
 
 
+def _event_source_events(
+    response: CommandResponse,
+    *,
+    stream_id: str = "",
+    cache: StreamReplayCache | None = None,
+    session_id: str = "",
+) -> Iterator[dict[str, str]]:
+    base = serialize_command_response(response)
+    if stream_id:
+        base["stream_id"] = stream_id
+    if cache is not None and session_id and stream_id:
+        cache.set_result(session_id, stream_id, base)
+
+    yield {"event": "result", "data": json.dumps(_jsonable(base), ensure_ascii=False)}
+
+    try:
+        if response.stream is not None:
+            for chunk in response.stream:
+                text = str(chunk)
+                if cache is not None and session_id and stream_id:
+                    cache.append_token(session_id, stream_id, text)
+                yield {"event": "token", "data": text}
+        if cache is not None and session_id and stream_id:
+            cache.mark_done(session_id, stream_id)
+        yield {"event": "done", "data": ""}
+    except Exception as exc:
+        message = f"流式响应中断：{exc}"
+        if cache is not None and session_id and stream_id:
+            cache.mark_error(session_id, stream_id, message)
+        yield {"event": "error", "data": message}
+        yield {"event": "done", "data": ""}
+
+
+def _replay_sse_events(entry: StreamCacheEntry, stream_id: str) -> Iterator[dict[str, str]]:
+    result = dict(entry.result or {})
+    result["stream_id"] = stream_id
+    result["replayed"] = True
+    result["resume_done"] = entry.done
+    yield {"event": "result", "data": json.dumps(_jsonable(result), ensure_ascii=False)}
+
+    for token in entry.tokens:
+        yield {"event": "token", "data": token}
+    if entry.error:
+        yield {"event": "error", "data": entry.error}
+    elif not entry.done:
+        yield {"event": "error", "data": "流式响应尚未完成，请重新发送请求。"}
+    yield {"event": "done", "data": ""}
+
+
 def _sse_response(response: CommandResponse) -> Iterator[str]:
-    yield _sse_event("start", serialize_command_response(response))
-    if response.stream is None:
-        yield _sse_event("done", {"ok": response.ok})
-        return
-
-    for chunk in response.stream:
-        yield _sse_event("chunk", {"text": chunk})
-    yield _sse_event("done", {"ok": response.ok})
+    for event in _event_source_events(response):
+        yield _sse_event(event["event"], event.get("data", ""))
 
 
-def _sse_event(event: str, data: dict[str, Any]) -> str:
-    json_data = json.dumps(_jsonable(data), ensure_ascii=False)
+def _sse_event(event: str, data: dict[str, Any] | str) -> str:
+    json_data = data if isinstance(data, str) else json.dumps(_jsonable(data), ensure_ascii=False)
     return f"event: {event}\ndata: {json_data}\n\n"
 
 

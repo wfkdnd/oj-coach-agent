@@ -88,6 +88,8 @@ async function streamCommand(payload) {
     const url = `/api/sessions/${state.sessionId}/command/stream`;
     const container = document.getElementById('chatMessages');
     const maxRetries = 2;
+    const streamId = createStreamId();
+    const firstPayload = { ...payload, stream_id: streamId };
     let streamMsgEl = null;
     let textSpan = null;
     let streamRawText = '';
@@ -110,7 +112,9 @@ async function streamCommand(payload) {
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
-            const retryPayload = (attempt > 0) ? { resume: true } : payload;
+            const retryPayload = (attempt > 0)
+                ? { resume: true, stream_id: streamId }
+                : firstPayload;
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -166,6 +170,10 @@ async function streamCommand(payload) {
                     } else if (eventType === 'result' && hasData) {
                         try {
                             const result = JSON.parse(data);
+                            if (result.replayed && textSpan) {
+                                streamRawText = '';
+                                textSpan.innerHTML = '';
+                            }
                             if (result.has_stream) {
                                 ensureStreamMessage(result.stream_title || '回答');
                             }
@@ -176,6 +184,12 @@ async function streamCommand(payload) {
                                 addResultMsg(_formatFrontendCommandOutput(payload, result.output));
                             }
                         } catch (e) { /* JSON 解析失败忽略 */ }
+                    } else if (eventType === 'error' && hasData) {
+                        ensureStreamMessage('回答');
+                        const suffix = streamRawText.trim() ? '\n\n' : '';
+                        streamRawText += `${suffix}（${data}）`;
+                        textSpan.innerHTML = renderMarkdown(streamRawText);
+                        scrollChat();
                     }
                 }
             }
@@ -228,6 +242,13 @@ async function streamCommand(payload) {
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function createStreamId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+    }
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 // ── 编辑器同步 ──────────────────────────────────────

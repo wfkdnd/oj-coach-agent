@@ -24,7 +24,7 @@ sync:
 
 # WebUI 模式：启动 FastAPI 服务器 + 静态前端
 web:
-	uv run uvicorn server:app --host 0.0.0.0 --port 8866 --reload
+	uv run uvicorn server:app --host 127.0.0.1 --port 8866 --reload
 
 # CLI/TUI 模式：Rich 增强的终端交互
 cli:
