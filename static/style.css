@@ -954,15 +954,135 @@ body {
 
 /* ── 会话切换器 ─────────────────────────────────── */
 
-#sessionSwitcher {
+.session-menu {
+    position: relative;
+}
+
+.session-menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 132px;
+    max-width: 220px;
     background: var(--bg-input);
     color: var(--text-primary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 3px 8px;
+    padding: 4px 9px;
     font-size: 12px;
     cursor: pointer;
-    max-width: 120px;
+}
+
+.session-menu-trigger:hover,
+.session-menu-trigger[aria-expanded="true"] {
+    border-color: var(--accent);
+}
+
+#sessionCurrentLabel {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.session-menu-arrow {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+}
+
+.session-menu-trigger[aria-expanded="true"] .session-menu-arrow {
+    transform: rotate(180deg);
+}
+
+.session-menu-popover {
+    position: absolute;
+    z-index: 280;
+    top: calc(100% + 7px);
+    left: 0;
+    width: min(310px, calc(100vw - 24px));
+    padding: 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 14px 38px rgba(0, 0, 0, 0.35);
+}
+
+.session-menu-popover[hidden] {
+    display: none;
+}
+
+.session-menu-list {
+    display: grid;
+    gap: 3px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.session-menu-empty {
+    padding: 16px 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.session-menu-item {
+    display: grid;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 9px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    text-align: left;
+    cursor: pointer;
+}
+
+.session-menu-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.session-menu-item.active {
+    border-color: var(--accent);
+    background: rgba(122, 162, 247, 0.12);
+}
+
+.session-menu-item-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+.session-menu-item-meta {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.session-menu-new {
+    width: 100%;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--accent);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.session-menu-new:hover {
+    border-color: var(--accent);
+    background: var(--bg-tertiary);
+}
+
+.session-menu-new:disabled {
+    cursor: wait;
+    opacity: 0.6;
 }
 
 #connBadge {
@@ -1530,7 +1650,7 @@ body {
     }
 
     .toolbar .badge,
-    #sessionSwitcher,
+    .session-menu-trigger,
     #langSelect,
     #connBadge {
         font-size: 10px;
