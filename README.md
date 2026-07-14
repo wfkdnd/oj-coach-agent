@@ -1,5 +1,7 @@
 # OJ Coach Agent
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)![Rich CLI](https://img.shields.io/badge/Rich-CLI-8A2BE2)![Vanilla JS](https://img.shields.io/badge/Frontend-Vanilla%20JS-F7DF1E?logo=javascript&logoColor=black)![CodeMirror](https://img.shields.io/badge/Editor-CodeMirror-1F6FEB)![uv](https://img.shields.io/badge/uv-managed-654FF0)![pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)![Local First](https://img.shields.io/badge/runtime-local%20first-2E8B57)
+
 OJ Coach Agent 是一个本地算法刷题陪练工作台，覆盖从读题、分析、写代码、管理测试用例、运行判题、定位错误到复盘总结的完整练习流程。
 
 当前 README 描述的是第二版当前实现，而不是开发计划。推荐入口是 WebUI；CLI 仍保留为轻量终端入口。
@@ -21,19 +23,20 @@ OJ Coach Agent 是一个本地算法刷题陪练工作台，覆盖从读题、�
 - 左侧题目、代码、测试用例标签页，右侧对话区，底部命令输入框。
 - 左右工作区可拖动调整宽度。
 - 题目和用例可以拖出为浮动面板，并支持拖动、缩放、放回。
-- 题目/代码文件上传和拖拽加载。
+- 题目/代码文件上传和拖拽加载，读取成功后会复用提交链路自动同步到当前会话。
 - 题目 Markdown 预览。
 - 题目、代码编辑器锁定/解锁。
 - 测试用例卡片化编辑，题目用例受保护，用户用例可同步增删改。
 - 长测试用例和长运行输出自动折叠。
 - `/` 命令候选、命令历史、普通问题自动转 `/ask`。
 - `/ask` 和 `/summary` 支持 SSE 流式输出。
-- SSE 断线重连和结果缓存。
+- SSE 断线重连和 `stream_id` 级结果缓存，避免重连串到旧回答。
 - LLM 配置状态检查；前端只显示 API Key 是否已配置，不会返回真实密钥。
 - 多会话创建、切换和状态刷新。
 - 连接状态检测、重连按钮。
 - 明暗主题切换。
 - 阶段 6/7 阅读日志抽屉：查看事件、上下文压缩状态和快照。
+- 命令历史和主题保存到浏览器 `localStorage`；完整题目和代码仍由当前后端内存会话维护。
 
 ### Rich CLI
 
@@ -72,6 +75,7 @@ OJ Coach Agent 是一个本地算法刷题陪练工作台，覆盖从读题、�
 - 读取题目后自动分析，并尝试提取题目样例。
 - 题目、代码、可运行测试用例都就绪时自动运行。
 - `LocalSessionStore` 管理本地内存会话。
+- `server.py` 通过 `create_app()` 复用统一 API 路由，并提供 30 分钟无活动会话清理。
 - 事件日志默认只记录命令元信息和长度，不保存完整题目或完整代码。
 - 支持手动 `/compress`、`/压缩`、`/compact` 上下文压缩。
 - 支持达到阈值时在 `/ask`、`/summary` 前自动压缩。
@@ -162,6 +166,14 @@ uv run uvicorn server:app --host 127.0.0.1 --port 8866 --reload
 http://localhost:8866
 ```
 
+也可以直接运行服务入口：
+
+```bash
+uv run python server.py
+```
+
+这个入口默认监听 `0.0.0.0:8866`，适合容器或云开发代理场景；本机自用时仍推荐上面的 `127.0.0.1` 命令。
+
 如果使用 Makefile：
 
 ```bash
@@ -169,6 +181,15 @@ make web
 ```
 
 注意：当前 Makefile 中 `make web` 使用 `0.0.0.0:8866`。如果电脑处在不可信网络，请优先使用上面的 `127.0.0.1` 命令。
+
+如果已经把项目作为可编辑包安装，也可以使用 `pyproject.toml` 中声明的脚本入口：
+
+```bash
+oj-coach-web
+oj-coach-cli
+```
+
+其中 `oj-coach-web` 同样默认监听 `0.0.0.0:8866`。
 
 ### 4. 启动 CLI
 
@@ -185,11 +206,11 @@ make cli
 ## WebUI 使用流程
 
 1. 打开 `http://localhost:8866`，页面会自动创建一个本地会话。
-2. 在“题目”标签页粘贴题目，或拖入 `.txt` / `.md` / `.markdown` / `.json` / `.html` 文件。
-3. 点击“提交”，后端会读取题目、自动分析并同步题目样例。
-4. 在“代码”标签页选择语言并粘贴完整 OJ 代码。
-5. 点击“提交”，如果题目样例已就绪，会自动运行。
-6. 在“用例”标签页添加或修改用户测试用例。
+2. 在“题目”标签页粘贴题目，或拖入 `.txt` / `.md` / `.markdown` / `.json` / `.html` / `.htm` 文件。
+3. 点击“提交”，或通过文件上传自动提交；后端会读取题目、自动分析并同步题目样例。
+4. 在“代码”标签页选择语言并粘贴完整 OJ 代码，或拖入 `.py` / `.cpp` / `.cc` / `.cxx` / `.java` / `.txt` 文件。
+5. 点击“提交”，或通过代码文件上传自动提交；如果题目样例已就绪，会自动运行。
+6. 在“用例”标签页添加或修改用户测试用例；题目样例默认受保护，用户用例支持删除后同步。
 7. 在底部输入 `/run` 运行，输入普通问题或 `/ask 问题` 继续追问。
 8. 使用 `/summary` 复盘，使用 `/compress` 手动压缩当前上下文。
 
@@ -304,13 +325,14 @@ uv run uvicorn server:app --host 127.0.0.1 --port 8866 --reload
 | `GET` | `/api/status/llm` | LLM 配置状态，不返回真实 API Key |
 | `POST` | `/api/sessions` | 创建会话 |
 | `GET` | `/api/sessions` | 列出活跃会话 |
-| `DELETE` | `/api/sessions/{session_id}` | 删除内存会话 |
+| `DELETE` | `/api/sessions/{session_id}` | 清理指定内存会话 |
 | `GET` | `/api/sessions/{session_id}/status` | 获取会话状态 |
 | `GET` | `/api/sessions/{session_id}/events` | 获取最近事件 |
 | `GET` | `/api/sessions/{session_id}/context` | 获取上下文压缩状态 |
 | `POST` | `/api/sessions/{session_id}/context/compress` | 手动压缩上下文 |
 | `POST` | `/api/sessions/{session_id}/command` | 执行非流式命令 |
 | `POST` | `/api/sessions/{session_id}/command/stream` | 通过 SSE 执行流式命令 |
+| `GET` | `/api/health` | 本地 API 健康检查 |
 
 命令请求支持原始命令：
 
@@ -331,6 +353,24 @@ uv run uvicorn server:app --host 127.0.0.1 --port 8866 --reload
 ```
 
 非 `/` 开头的问题会自动转为 `/ask`。
+
+流式命令会返回 SSE 事件：
+
+- `result`：命令元信息、`stream_id`、是否有流式内容。
+- `token`：LLM 或降级回答的增量文本。
+- `error`：流式过程中出现的错误。
+- `done`：本次流式响应结束。
+
+断线重连时需要带上同一个 `stream_id`：
+
+```json
+{
+  "resume": true,
+  "stream_id": "同一次请求的 stream_id"
+}
+```
+
+如果缺少 `stream_id` 或缓存不存在，服务端会返回明确错误，而不会重新执行原命令。
 
 ## 项目结构
 
@@ -386,12 +426,15 @@ C++ / Java 相关测试依赖本机已安装对应编译器或 JDK。FastAPI 相
 
 - 当前代码执行不是完整沙箱，不能运行不可信代码。
 - Web/API 会话保存在内存中，服务重启后会话消失。
+- 会话 30 分钟无活动会被后台任务清理。
 - 不做公网部署、多用户权限和远程代码执行服务。
 - 不默认持久化完整题目和完整代码。
 - 不支持 JavaScript 运行。
 - 不支持 LeetCode 风格 `class Solution` 自动驱动。
 - C++ 依赖本机 `g++`，Java 依赖本机 JDK。
 - WebUI 编辑器能力依赖 CDN；离线时会降级，语法高亮可能不可用。
+- CLI/API 的 `/load_problem` 支持 `.txt`、`.md`、`.docx`；WebUI 文件上传是浏览器侧文本读取，支持的扩展名更多。
+- CLI/API 的 `/load_code` 支持 `.py`、`.cpp`、`.java`；WebUI 上传还会识别 `.cc`、`.cxx`，`.txt` 保留当前语言选择。
 - `main.py` 和 `coding_tools/` 仍保留通用 Coding Agent 课程示例能力，但 OJ 刷题推荐使用 `server.py` 或 `oj_coach_main.py`。
 
 ## 安全约定
