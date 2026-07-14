@@ -88,6 +88,8 @@ async function streamCommand(payload) {
     const url = `/api/sessions/${state.sessionId}/command/stream`;
     const container = document.getElementById('chatMessages');
     const maxRetries = 2;
+    const streamId = createStreamId();
+    const firstPayload = { ...payload, stream_id: streamId };
     let streamMsgEl = null;
     let textSpan = null;
     let streamRawText = '';
@@ -110,7 +112,9 @@ async function streamCommand(payload) {
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
-            const retryPayload = (attempt > 0) ? { resume: true } : payload;
+            const retryPayload = (attempt > 0)
+                ? { resume: true, stream_id: streamId }
+                : firstPayload;
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -166,6 +170,10 @@ async function streamCommand(payload) {
                     } else if (eventType === 'result' && hasData) {
                         try {
                             const result = JSON.parse(data);
+                            if (result.replayed && textSpan) {
+                                streamRawText = '';
+                                textSpan.innerHTML = '';
+                            }
                             if (result.has_stream) {
                                 ensureStreamMessage(result.stream_title || '回答');
                             }
@@ -176,6 +184,12 @@ async function streamCommand(payload) {
                                 addResultMsg(_formatFrontendCommandOutput(payload, result.output));
                             }
                         } catch (e) { /* JSON 解析失败忽略 */ }
+                    } else if (eventType === 'error' && hasData) {
+                        ensureStreamMessage('回答');
+                        const suffix = streamRawText.trim() ? '\n\n' : '';
+                        streamRawText += `${suffix}（${data}）`;
+                        textSpan.innerHTML = renderMarkdown(streamRawText);
+                        scrollChat();
                     }
                 }
             }
@@ -230,6 +244,13 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function createStreamId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+    }
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 // ── 编辑器同步 ──────────────────────────────────────
 
 function _syncEditors() {
@@ -252,7 +273,7 @@ function _getProblemText() {
 async function submitProblem() {
     _syncEditors();
     const text = _getProblemText().trim();
-    if (!text) { addErrorMsg('请先输入题目文本'); return; }
+    if (!text) { addErrorMsg('请先输入题目文本'); return null; }
     // 提交前自动从题目中提取测试用例
     if (typeof _extractAndPopulateTestCases === 'function') {
         _extractAndPopulateTestCases(text);
@@ -262,14 +283,15 @@ async function submitProblem() {
         window.__testCasesDirty = false;
         await refreshStatus();
     }
+    return result;
 }
 
 async function submitCode() {
     _syncEditors();
     const code = document.getElementById('codeInput').value.trim();
     const lang = document.getElementById('langSelect').value;
-    if (!code) { addErrorMsg('请先输入代码'); return; }
-    await normalCommand({ command: 'paste_code', args: lang, input_text: code });
+    if (!code) { addErrorMsg('请先输入代码'); return null; }
+    return normalCommand({ command: 'paste_code', args: lang, input_text: code });
 }
 
 async function submitCases() {
