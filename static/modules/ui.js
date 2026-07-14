@@ -493,8 +493,8 @@ async function _loadFile(file, target = 'problem') {
         if (target === 'code') {
             _setEditorContent('codeInput', text);
             _selectLanguageForCodeFile(file.name);
-            showToast('已加载代码: ' + file.name);
             switchTab('code');
+            await _autoSubmitLoadedFile('code', file.name);
             return;
         }
 
@@ -503,10 +503,31 @@ async function _loadFile(file, target = 'problem') {
         _extractAndPopulateTestCases(text);
         // Markdown 文件默认以阅读视图打开，仍可点击“编辑”返回原文。
         _setProblemPreview(/\.(md|markdown)$/i.test(file.name));
-        showToast('已加载: ' + file.name);
         switchTab('problem');
+        await _autoSubmitLoadedFile('problem', file.name);
     } catch (err) {
         showToast('读取文件失败: ' + err.message, 'toast-error');
+    }
+}
+
+/**
+ * 上传后复用按钮的提交链路，确保点击选择和拖拽上传行为一致。
+ * 读取已经成功时，提交失败不应误报为“读取失败”。
+ */
+async function _autoSubmitLoadedFile(target, fileName) {
+    const label = target === 'code' ? '代码' : '题目';
+    showToast(`已读取${label}，正在自动提交: ${fileName}`);
+    try {
+        const result = target === 'code'
+            ? await submitCode()
+            : await submitProblem();
+        if (result && result.ok) {
+            showToast(`已读取并提交${label}: ${fileName}`);
+            return;
+        }
+        showToast(`${label}已读取，但自动提交未成功`, 'toast-warning');
+    } catch (err) {
+        showToast(`${label}已读取，但自动提交失败: ${err.message}`, 'toast-error');
     }
 }
 
