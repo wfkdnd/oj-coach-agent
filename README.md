@@ -1,6 +1,6 @@
 # OJ Coach Agent
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)![Rich CLI](https://img.shields.io/badge/Rich-CLI-8A2BE2)![Vanilla JS](https://img.shields.io/badge/Frontend-Vanilla%20JS-F7DF1E?logo=javascript&logoColor=black)![CodeMirror](https://img.shields.io/badge/Editor-CodeMirror-1F6FEB)![uv](https://img.shields.io/badge/uv-managed-654FF0)![pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)![Local First](https://img.shields.io/badge/runtime-local%20first-2E8B57)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white) ![Rich CLI](https://img.shields.io/badge/Rich-CLI-8A2BE2) ![Vanilla JS](https://img.shields.io/badge/Frontend-Vanilla%20JS-F7DF1E?logo=javascript&logoColor=black) ![CodeMirror](https://img.shields.io/badge/Editor-CodeMirror-1F6FEB) ![uv](https://img.shields.io/badge/uv-managed-654FF0) ![pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white) ![Local First](https://img.shields.io/badge/runtime-local%20first-2E8B57)
 
 OJ Coach Agent 是一个本地算法刷题陪练工作台，覆盖从读题、分析、写代码、管理测试用例、运行判题、定位错误到复盘总结的完整练习流程。
 
