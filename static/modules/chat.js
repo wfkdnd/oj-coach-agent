@@ -273,7 +273,7 @@ function _getProblemText() {
 async function submitProblem() {
     _syncEditors();
     const text = _getProblemText().trim();
-    if (!text) { addErrorMsg('请先输入题目文本'); return; }
+    if (!text) { addErrorMsg('请先输入题目文本'); return null; }
     // 提交前自动从题目中提取测试用例
     if (typeof _extractAndPopulateTestCases === 'function') {
         _extractAndPopulateTestCases(text);
@@ -283,14 +283,15 @@ async function submitProblem() {
         window.__testCasesDirty = false;
         await refreshStatus();
     }
+    return result;
 }
 
 async function submitCode() {
     _syncEditors();
     const code = document.getElementById('codeInput').value.trim();
     const lang = document.getElementById('langSelect').value;
-    if (!code) { addErrorMsg('请先输入代码'); return; }
-    await normalCommand({ command: 'paste_code', args: lang, input_text: code });
+    if (!code) { addErrorMsg('请先输入代码'); return null; }
+    return normalCommand({ command: 'paste_code', args: lang, input_text: code });
 }
 
 async function submitCases() {
