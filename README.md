@@ -1,213 +1,348 @@
-# OJ Coach Agent 第二版开发需求与实现计划
+# OJ Coach Agent
 
-## 项目定位
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white) ![Rich CLI](https://img.shields.io/badge/Rich-CLI-8A2BE2) ![Vanilla JS](https://img.shields.io/badge/Frontend-Vanilla%20JS-F7DF1E?logo=javascript&logoColor=black) ![CodeMirror](https://img.shields.io/badge/Editor-CodeMirror-1F6FEB) ![uv](https://img.shields.io/badge/uv-managed-654FF0) ![pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white) ![Local First](https://img.shields.io/badge/runtime-local%20first-2E8B57)
 
-OJ Coach Agent 是一个本地算法刷题陪练工具，目标是陪用户完成：
+OJ Coach Agent 是一个本地算法刷题陪练工作台，覆盖从读题、分析、写代码、管理测试用例、运行判题、定位错误到复盘总结的完整练习流程。
 
-```text
-读题 -> 分析题目 -> 写代码 -> 管理测试用例 -> 运行代码 -> 定位错误 -> 继续追问 -> 复盘总结
-```
+当前 README 描述的是第二版当前实现，而不是开发计划。推荐入口是 WebUI；CLI 仍保留为轻量终端入口。
 
-第一版已经完成终端可用链路。第二版的目标是把现有能力升级为“前端 + 本地后端 API + 可复用命令层 + 上下文压缩”的桌面式刷题工作台。
+> 【风险提示】
+> 本项目会在本机执行用户提供的 OJ 代码。当前实现使用临时目录、运行超时、输出截断和 `shell=False` 降低风险，但这不是完整沙箱。请只运行可信代码，不要把服务暴露到公网，也不要在题目或代码中放入密钥、Token、私钥等敏感信息。
 
-第二版不改变核心原则：
+## 当前能力
 
-- 工具负责真实读取、运行、对比和结构化结果。
-- LLM 负责解释错误、引导思路、回答追问和复盘。
-- 不捏造运行结果，只有真实运行后才能说明运行状态。
-- 默认本地运行，谨慎处理用户代码和文件。
+### WebUI 工作台
 
-## 当前已完成基线
+入口：`server.py` + `static/`
+
+已实现：
+
+- FastAPI 后端服务，根路径 `/` 直接提供静态前端。
+- 原生 HTML/CSS/JavaScript 前端，无构建步骤。
+- CodeMirror 代码/题目编辑器，支持 Python、C++、Java 语法高亮；CDN 不可用时回退到原生 textarea。
+- 左侧题目、代码、测试用例标签页，右侧对话区，底部命令输入框。
+- 左右工作区可拖动调整宽度。
+- 题目和用例可以拖出为浮动面板，并支持拖动、缩放、放回。
+- 题目/代码文件上传和拖拽加载，读取成功后会复用提交链路自动同步到当前会话。
+- 题目 Markdown 预览。
+- 题目、代码编辑器锁定/解锁。
+- 测试用例卡片化编辑，题目用例受保护，用户用例可同步增删改。
+- 长测试用例和长运行输出自动折叠。
+- `/` 命令候选、命令历史、普通问题自动转 `/ask`。
+- `/ask` 和 `/summary` 支持 SSE 流式输出。
+- SSE 断线重连和 `stream_id` 级结果缓存，避免重连串到旧回答。
+- LLM 配置状态检查；前端只显示 API Key 是否已配置，不会返回真实密钥。
+- 多会话创建、切换和状态刷新。
+- 连接状态检测、重连按钮。
+- 明暗主题切换。
+- 阶段 6/7 阅读日志抽屉：查看事件、上下文压缩状态和快照。
+- 命令历史和主题保存到浏览器 `localStorage`；完整题目和代码仍由当前后端内存会话维护。
+
+### Rich CLI
+
+入口：`oj_coach_main.py`
+
+已实现：
+
+- Rich 面板化欢迎界面。
+- 命令式交互，支持非 `/` 输入自动转为 `/ask`。
+- 运行结果表格化展示。
+- 测试用例明细表格。
+- 编译输出、标准错误、差异信息分区展示。
+- `/ask` 和 `/summary` 流式输出。
+- 状态面板和复盘面板。
+
+### 会话与命令层
+
+核心模块：
+
+- `oj_coach/session.py`
+- `oj_coach/commands.py`
+- `oj_coach/api.py`
+- `oj_coach/context.py`
+
+已实现：
+
+- `OJCoachSession` 维护单次刷题状态：
+  - `problem_text`
+  - `analysis_result`
+  - `language`
+  - `code`
+  - `test_cases`
+  - `last_run_result`
+  - `timeout_ms`
+- `OJCoachCommandRouter` 统一处理 CLI、API、前端共用的 `/` 命令。
+- 读取题目后自动分析，并尝试提取题目样例。
+- 题目、代码、可运行测试用例都就绪时自动运行。
+- `LocalSessionStore` 管理本地内存会话。
+- `server.py` 通过 `create_app()` 复用统一 API 路由，并提供 30 分钟无活动会话清理。
+- 事件日志默认只记录命令元信息和长度，不保存完整题目或完整代码。
+- 支持手动 `/compress`、`/压缩`、`/compact` 上下文压缩。
+- 支持达到阈值时在 `/ask`、`/summary` 前自动压缩。
+- 压缩快照保留题目摘要、代码摘要、用例摘要、运行摘要、对话摘要和关键事实；最新代码和最新运行结果在构造 LLM 上下文时单独注入。
 
 ### OJ 工具层
 
-已存在 `oj_tools/`：
+核心模块：`oj_tools/`
 
-```text
-oj_tools/
-  __init__.py
-  analyze_problem.py
-  read_problem_file.py
-  read_code_file.py
-  run_oj_code.py
-  compare_output.py
-  summarize_practice.py
-  _algorithm_rules.py
+已实现：
+
+- 读取题目文本或本地题目文件。
+- 支持题目文件：`.txt`、`.md`、`.docx`。
+- 读取完整 OJ 代码。
+- 支持代码文件：`.py`、`.cpp`、`.java`。
+- 规则分析题目标题、题意、输入输出、约束、样例、输入类型、算法候选和学习建议。
+- 规则提取题目样例为统一测试用例。
+- LLM 可用时，优先用 LLM 抽取题目样例 JSON；失败则回退到规则提取。
+- 支持 JSON 和“输入/输出”文本格式的用户测试用例。
+- 支持 Python、C++、Java 代码运行。
+- C++ 使用 `g++ -std=c++17 -O2` 编译。
+- Java 使用 `javac Main.java` 编译，运行 `java Main`。
+- 批量运行测试用例，返回结构化 JSON。
+- 输出对比模式：
+  - `strict`
+  - `trailing`，默认
+  - `relaxed`
+  - `full_trim`
+- 生成规则版复盘，并在 LLM 可用时生成讲解版复盘。
+
+## 快速开始
+
+### 1. 准备环境
+
+要求：
+
+- Python 3.10 或更高版本。
+- 推荐使用 `uv` 管理依赖。
+- 运行 C++ 需要本机可用 `g++`。
+- 运行 Java 需要本机可用 JDK 和 `javac`。
+- WebUI 的 CodeMirror/highlight.js 默认从 CDN 加载；离线环境下编辑器会降级。
+
+安装依赖：
+
+```bash
+uv sync
 ```
 
-主要能力：
+如果本机有 `make`，也可以使用：
 
-- 读取题目文本或题目文件。
-- 读取 Python / C++ / Java 代码。
-- 分析题目并提取样例。
-- 统一测试用例 JSON。
-- 运行 OJ 代码并返回结构化结果。
-- 对比实际输出与期望输出。
-- 生成规则版复盘。
-
-### 会话层
-
-已新增 `oj_coach/session.py`，核心类是 `OJCoachSession`。
-
-它负责维护当前刷题状态：
-
-```text
-problem_text
-analysis_result
-language
-code
-test_cases
-last_run_result
-timeout_ms
+```bash
+make install
 ```
 
-它负责串联这些动作：
+### 2. 配置 LLM
 
-- `set_problem_text`
-- `load_problem_file`
-- `analyze_problem`
-- `set_code`
-- `load_code_file`
-- `add_cases`
-- `set_timeout`
-- `run_code`
-- `ask` / `ask_stream`
-- `summarize`
+LLM 是可选能力。没有配置 LLM 时，仍可使用题目规则分析、测试用例管理、代码运行、输出对比和规则版复盘。
+
+在系统环境变量或项目根目录 `.env` 中配置：
+
+```text
+BASE_URL=你的 OpenAI-compatible API 地址
+API_KEY=你的 API Key
+MODEL_ID=你的模型名称
+```
+
+也支持 CNB 环境变量兜底：
+
+```text
+CNB_API_ENDPOINT=...
+CNB_REPO_SLUG=...
+CNB_TOKEN=...
+```
+
+`MODEL_ID` 未设置时默认使用 `glm-5.0`。Embedding 默认模型名来自 `EMBEDDING_MODEL`，未设置时为 `hunyuan-embedding`。
+
+### 3. 启动 WebUI
+
+推荐只监听本机地址：
+
+```bash
+uv run uvicorn server:app --host 127.0.0.1 --port 8866 --reload
+```
+
+然后打开：
+
+```text
+http://localhost:8866
+```
+
+也可以直接运行服务入口：
+
+```bash
+uv run python server.py
+```
+
+这个入口默认监听 `0.0.0.0:8866`，适合容器或云开发代理场景；本机自用时仍推荐上面的 `127.0.0.1` 命令。
+
+如果使用 Makefile：
+
+```bash
+make web
+```
+
+注意：当前 Makefile 中 `make web` 使用 `0.0.0.0:8866`。如果电脑处在不可信网络，请优先使用上面的 `127.0.0.1` 命令。
+
+如果已经把项目作为可编辑包安装，也可以使用 `pyproject.toml` 中声明的脚本入口：
+
+```bash
+oj-coach-web
+oj-coach-cli
+```
+
+其中 `oj-coach-web` 同样默认监听 `0.0.0.0:8866`。
+
+### 4. 启动 CLI
+
+```bash
+uv run python oj_coach_main.py
+```
+
+如果使用 Makefile：
+
+```bash
+make cli
+```
+
+## WebUI 使用流程
+
+1. 打开 `http://localhost:8866`，页面会自动创建一个本地会话。
+2. 在“题目”标签页粘贴题目，或拖入 `.txt` / `.md` / `.markdown` / `.json` / `.html` / `.htm` 文件。
+3. 点击“提交”，或通过文件上传自动提交；后端会读取题目、自动分析并同步题目样例。
+4. 在“代码”标签页选择语言并粘贴完整 OJ 代码，或拖入 `.py` / `.cpp` / `.cc` / `.cxx` / `.java` / `.txt` 文件。
+5. 点击“提交”，或通过代码文件上传自动提交；如果题目样例已就绪，会自动运行。
+6. 在“用例”标签页添加或修改用户测试用例；题目样例默认受保护，用户用例支持删除后同步。
+7. 在底部输入 `/run` 运行，输入普通问题或 `/ask 问题` 继续追问。
+8. 使用 `/summary` 复盘，使用 `/compress` 手动压缩当前上下文。
+
+## CLI 命令
+
+| 命令 | 说明 |
+|---|---|
+| `/help` | 查看帮助 |
+| `/status` | 查看当前会话状态 |
+| `/paste_problem` | 多行粘贴题目，单独输入 `END` 结束 |
+| `/load_problem <path>` | 从 `.txt` / `.md` / `.docx` 读取题目 |
+| `/analyze` | 重新分析当前题目 |
+| `/paste_code <language>` | 多行粘贴完整 OJ 代码，语言为 `python` / `cpp` / `java` |
+| `/load_code <path>` | 从 `.py` / `.cpp` / `.java` 读取代码 |
+| `/set_cases` | 添加用户测试用例 |
+| `/set_timeout <ms>` | 设置运行超时时间 |
+| `/run` | 运行当前代码 |
+| `/ask [question]` | 基于当前题目、代码和最近运行结果追问 |
+| `/summary [notes]` | 生成复盘总结 |
+| `/compress` | 在本地 API / WebUI 中压缩上下文 |
+| `/exit` | 退出 CLI |
+
+旧命令 `/set_stdin` 和 `/set_expected` 已废弃，统一使用 `/set_cases`。
+
+## 测试用例格式
+
+JSON 格式：
+
+```json
+{
+  "test_cases": [
+    {
+      "name": "自定义用例 1",
+      "stdin": "1 2",
+      "expected_output": "3"
+    }
+  ]
+}
+```
+
+文本格式：
+
+```text
+输入：
+1 2
+输出：
+3
+END
+```
+
+多组用例可用 `---` 或 `===` 分隔：
+
+```text
+输入：
+1 2
+输出：
+3
+---
+输入：
+10 20
+输出：
+30
+END
+```
+
+无输入题可以把输入留空，但每组可运行用例必须提供期望输出。
+
+## 运行结果状态
+
+`run_oj_code` 返回结构化 JSON，主要字段包括：
+
 - `status`
+- `stdout`
+- `stderr`
+- `exit_code`
+- `compile_output`
+- `time_ms`
+- `normalized_stdout`
+- `normalized_expected_output`
+- `diff_info`
+- `case_count`
+- `passed_count`
+- `failed_count`
+- `test_cases`
 
-### 命令路由层
+常见状态：
 
-已新增 `oj_coach/commands.py`，核心类是 `OJCoachCommandRouter`。
+| 状态 | 含义 |
+|---|---|
+| `accepted` | 实际输出与期望输出一致 |
+| `wrong_answer` | 程序正常结束，但输出不一致 |
+| `compile_error` | 编译失败或语言环境不可用 |
+| `runtime_error` | 程序运行时异常退出 |
+| `time_limit_exceeded` | 编译或运行超时 |
+| `no_expected_output` | 已运行，但缺少期望输出，无法判题 |
 
-这一层统一处理 `/` 命令：
+输出展示最长保留 `20000` 字符，运行超时最大限制为 `30000ms`。
 
-- 解析命令和参数。
-- 判断是否需要多行输入。
-- 调用 `OJCoachSession`。
-- 返回结构化 `CommandResponse`。
-- 渲染运行结果、状态、帮助文本和复盘结果。
+## 本地 API
 
-当前 CLI 和未来前端都应该复用这一层，避免在多个入口里重复实现 `/run`、`/ask`、`/summary` 等逻辑。
+推荐运行入口是 `server.py`：
 
-### CLI 薄壳
-
-`oj_coach_main.py` 已经变成薄 CLI：
-
-- 启动一个 `OJCoachCommandRouter`。
-- 读取用户输入。
-- 收集多行内容。
-- 打印 `CommandResponse`。
-- `/exit` 退出。
-
-它不再维护旧状态，也不再直接编排工具调用。
-
-### 测试基线
-
-已有测试覆盖：
-
-- `tests/test_oj_coach_session.py`
-- `tests/test_oj_coach_commands.py`
-- `oj_tools_test/` 下的 OJ 工具测试
-
-当前环境如果没有 `pytest`，可以直接执行测试函数；后续第二版建议补齐标准测试入口。
-
-## 第二版目标
-
-第二版要在当前基线上实现一个本地 Web 工作台。
-
-核心需求：
-
-1. 提供前端界面。
-2. 前端支持 `/` 命令，行为和 CLI 保持一致。
-3. 前端底部是命令输入框。
-4. 上方左侧包含题目框、代码框、测试用例框。
-5. 上方右侧是对话框。
-6. 题目框、代码框、测试用例框、对话框都可以拖动调整大小。
-7. 支持流式回答。
-8. 准备加入上下文压缩能力。
-9. 保留 CLI，CLI 继续作为轻量调试入口。
-
-## 第二版推荐架构
-
-```text
-前端 UI
-  |
-  | HTTP / SSE 或 WebSocket
-  v
-本地 API 层
-  |
-  v
-OJCoachCommandRouter
-  |
-  v
-OJCoachSession
-  |
-  v
-oj_tools + LLMClient
+```bash
+uv run uvicorn server:app --host 127.0.0.1 --port 8866 --reload
 ```
 
-关键原则：
+主要接口：
 
-- 前端不直接实现刷题业务逻辑。
-- API 不重复写 `/` 命令逻辑。
-- CLI 和前端都走 `OJCoachCommandRouter`。
-- 会话状态只由 `OJCoachSession` 管理。
-- 上下文压缩只读会话状态和事件日志，不直接散落在 UI 中。
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/` | WebUI 页面 |
+| `GET` | `/api/status/llm` | LLM 配置状态，不返回真实 API Key |
+| `POST` | `/api/sessions` | 创建会话 |
+| `GET` | `/api/sessions` | 列出活跃会话 |
+| `DELETE` | `/api/sessions/{session_id}` | 清理指定内存会话 |
+| `GET` | `/api/sessions/{session_id}/status` | 获取会话状态 |
+| `GET` | `/api/sessions/{session_id}/events` | 获取最近事件 |
+| `GET` | `/api/sessions/{session_id}/context` | 获取上下文压缩状态 |
+| `POST` | `/api/sessions/{session_id}/context/compress` | 手动压缩上下文 |
+| `POST` | `/api/sessions/{session_id}/command` | 执行非流式命令 |
+| `POST` | `/api/sessions/{session_id}/command/stream` | 通过 SSE 执行流式命令 |
+| `GET` | `/api/health` | 本地 API 健康检查 |
 
-## 后端开发需求
+命令请求支持原始命令：
 
-### 1. 新增本地 API 层
-
-建议新增：
-
-```text
-oj_coach/api.py
+```json
+{
+  "raw": "/run"
+}
 ```
 
-建议使用 FastAPI。
-
-初始接口：
-
-```text
-POST /api/sessions
-GET  /api/sessions/{session_id}/status
-POST /api/sessions/{session_id}/command
-POST /api/sessions/{session_id}/command/stream
-```
-
-可选拆分接口：
-
-```text
-POST /api/sessions/{session_id}/problem
-POST /api/sessions/{session_id}/code
-POST /api/sessions/{session_id}/cases
-POST /api/sessions/{session_id}/run
-POST /api/sessions/{session_id}/ask
-POST /api/sessions/{session_id}/summary
-```
-
-第一阶段建议先做统一 `command` 接口，降低前端接入成本。
-
-### 2. 会话管理
-
-API 层需要维护多个本地会话：
-
-```python
-sessions: dict[str, OJCoachCommandRouter]
-```
-
-每个 session 持有独立的：
-
-- `OJCoachSession`
-- `OJCoachCommandRouter`
-- 事件日志
-- 上下文压缩状态
-
-第一版 API 可以只做内存会话，不做持久化。
-
-### 3. 命令请求格式
-
-建议请求：
+也支持结构化请求：
 
 ```json
 {
@@ -217,447 +352,95 @@ sessions: dict[str, OJCoachCommandRouter]
 }
 ```
 
-也可以允许前端直接传原始命令：
+非 `/` 开头的问题会自动转为 `/ask`。
+
+流式命令会返回 SSE 事件：
+
+- `result`：命令元信息、`stream_id`、是否有流式内容。
+- `token`：LLM 或降级回答的增量文本。
+- `error`：流式过程中出现的错误。
+- `done`：本次流式响应结束。
+
+断线重连时需要带上同一个 `stream_id`：
 
 ```json
 {
-  "raw": "/run"
+  "resume": true,
+  "stream_id": "同一次请求的 stream_id"
 }
 ```
 
-API 内部使用 `parse_command_line(raw)` 转成命令和参数。
+如果缺少 `stream_id` 或缓存不存在，服务端会返回明确错误，而不会重新执行原命令。
 
-### 4. 命令响应格式
-
-建议响应：
-
-```json
-{
-  "ok": true,
-  "messages": [],
-  "output": "",
-  "data": {},
-  "status": {}
-}
-```
-
-`CommandResponse.stream` 不能直接 JSON 序列化。流式回答应由 `/command/stream` 单独处理。
-
-### 5. 流式输出
-
-建议先用 SSE：
+## 项目结构
 
 ```text
-POST /api/sessions/{session_id}/command/stream
+.
+├── server.py                  # 推荐 WebUI/FastAPI 入口
+├── oj_coach_main.py           # Rich CLI 入口
+├── oj_coach/
+│   ├── api.py                 # 本地会话仓库、API 支撑层、事件日志
+│   ├── commands.py            # / 命令解析和路由
+│   ├── context.py             # OJ 专用上下文压缩快照
+│   ├── prompts.py             # OJ Coach LLM 提示词
+│   └── session.py             # OJCoachSession 状态与编排
+├── oj_tools/
+│   ├── analyze_problem.py     # 规则题目分析
+│   ├── compare_output.py      # 输出对比
+│   ├── read_code_file.py      # 代码读取
+│   ├── read_problem_file.py   # 题目读取
+│   ├── run_oj_code.py         # Python/C++/Java 运行器
+│   └── summarize_practice.py  # 规则版复盘
+├── static/
+│   ├── index.html             # WebUI 页面
+│   ├── style.css              # WebUI 样式
+│   ├── app.js                 # 前端入口
+│   └── modules/               # session/chat/ui/theme 模块
+├── tests/                     # 会话、API、WebUI、工具测试
+├── oj_tools_test/             # OJ 工具测试与样例数据
+├── coding_tools/              # 通用 Coding Agent 工具
+├── llm.py                     # OpenAI-compatible LLMClient
+├── _env.py                    # 环境变量读取
+├── pyproject.toml             # uv 依赖配置
+└── Makefile                   # web / cli / install 快捷命令
 ```
 
-适用命令：
+## 测试
 
-- `/ask`
-- 后续可能扩展到 `/run` 的 LLM 解释
-- 后续可能扩展到 `/summary` 的 LLM 讲解
+推荐执行：
 
-如果后面要做更复杂的双向交互，再升级为 WebSocket。
-
-## 前端开发需求
-
-### 1. 技术选型
-
-建议：
-
-```text
-frontend/
-  Vite
-  React
-  TypeScript
-  Monaco Editor
-  react-resizable-panels
+```bash
+uv run pytest tests oj_tools_test
 ```
 
-原因：
+也可以分别运行：
 
-- React 适合复杂交互面板。
-- Monaco Editor 适合代码编辑。
-- `react-resizable-panels` 适合实现可拖动布局。
-- Vite 本地开发简单，适合当前阶段。
-
-### 2. 页面布局
-
-第一屏就是工作台，不做营销页。
-
-建议布局：
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ 顶部工具栏：会话状态 / 运行状态 / 超时设置 / 语言选择        │
-├───────────────────────────────┬─────────────────────────────┤
-│ 左侧工作区                    │ 右侧对话区                  │
-│                               │                             │
-│ ┌───────────────────────────┐ │ ┌─────────────────────────┐ │
-│ │ 题目框                    │ │ │ 对话消息                │ │
-│ └───────────────────────────┘ │ │                         │ │
-│ ┌───────────────────────────┐ │ │                         │ │
-│ │ 代码框                    │ │ │                         │ │
-│ └───────────────────────────┘ │ └─────────────────────────┘ │
-│ ┌───────────────────────────┐ │                             │
-│ │ 测试用例框                │ │                             │
-│ └───────────────────────────┘ │                             │
-├───────────────────────────────┴─────────────────────────────┤
-│ 底部命令输入框：/run、/ask、/summary、/set_cases ...          │
-└─────────────────────────────────────────────────────────────┘
+```bash
+uv run pytest tests
+uv run pytest oj_tools_test
 ```
 
-所有主要区域需要支持拖动调整大小：
-
-- 左右分栏可调。
-- 左侧题目 / 代码 / 测试用例高度可调。
-- 对话区随窗口变化自适应。
-- 底部命令输入框高度可支持多行。
-
-### 3. 题目框
-
-功能：
-
-- 粘贴或编辑题目文本。
-- 调用 `/paste_problem`。
-- 显示自动分析状态。
-- 显示题目样例提取结果摘要。
-
-后续可加：
-
-- 从文件加载题目。
-- 题目分析 JSON 的可视化展示。
-
-### 4. 代码框
-
-功能：
-
-- Monaco Editor 编辑代码。
-- 语言选择：Python / C++ / Java。
-- 调用 `/paste_code <language>`。
-- 展示最近一次运行状态。
-
-注意：
-
-- 前端编辑代码不等于 session 已更新。
-- 用户点击运行或发送命令前，需要把当前编辑器内容同步到后端。
-
-### 5. 测试用例框
-
-功能：
-
-- 支持 JSON 格式。
-- 支持“输入/输出”文本格式。
-- 调用 `/set_cases`。
-- 展示当前可运行用例数量。
-- 区分来源：题目 / 用户。
-
-### 6. 对话框
-
-功能：
-
-- 展示系统消息、运行结果、LLM 回复。
-- 支持流式输出。
-- 支持复制单条消息。
-- 展示错误状态。
-
-消息类型建议：
-
-```text
-system
-user
-assistant
-tool
-run_result
-error
-```
-
-### 7. 底部命令输入框
-
-功能：
-
-- 支持 `/` 命令。
-- 支持普通问题自动转成 `/ask`。
-- 支持命令候选提示。
-- 支持多行输入。
-- Enter 发送，Shift+Enter 换行。
-
-命令候选来自后端或前端常量，第一阶段可以前端写死：
-
-```text
-/paste_problem
-/paste_code
-/set_cases
-/run
-/ask
-/summary
-/status
-/set_timeout
-```
-
-## 上下文压缩设计
-
-第二版先预留上下文压缩，不要一开始就把压缩逻辑塞进前端。
-
-建议新增：
-
-```text
-oj_coach/context.py
-```
-
-核心对象：
-
-```python
-class SessionEvent:
-    type: str
-    payload: dict
-    created_at: str
-
-class ContextSnapshot:
-    problem_summary: str
-    code_summary: str
-    test_case_summary: str
-    run_summary: str
-    conversation_summary: str
-    important_facts: list[str]
-
-class ContextCompressor:
-    def should_compress(...)
-    def compress(...)
-    def build_llm_context(...)
-```
-
-压缩输入：
-
-- 当前题目。
-- 题目分析。
-- 当前代码摘要。
-- 当前测试用例摘要。
-- 最近运行结果。
-- 用户追问和 LLM 回答。
-- 关键错误定位结论。
-
-压缩输出：
-
-- 问题本质。
-- 当前解法状态。
-- 已发现错误。
-- 已验证样例。
-- 用户仍在追问的重点。
-- 不应丢失的事实。
-
-第一阶段可以只记录事件日志，不真正压缩：
-
-```text
-event log -> 未来压缩器输入
-```
-
-第二阶段再接入 LLM 压缩。
-
-## 数据流设计
-
-### 运行代码
-
-```text
-前端点击运行或输入 /run
-  -> 如代码编辑器有未同步内容，先调用 /paste_code
-  -> 调用 /run
-  -> API 调用 OJCoachCommandRouter.execute("run")
-  -> OJCoachSession.run_code()
-  -> oj_tools.run_oj_code()
-  -> 返回结构化结果
-  -> 前端渲染运行结果和测试用例明细
-```
-
-### 追问
-
-```text
-用户输入问题
-  -> 前端转成 /ask 或直接调用 /command/stream
-  -> CommandRouter 调用 session.ask_stream()
-  -> session 构造当前上下文
-  -> LLM 流式返回
-  -> 前端逐 token 追加到对话框
-```
-
-### 上下文压缩
-
-```text
-每次命令执行后记录事件
-  -> 检查上下文长度或事件数量
-  -> 达到阈值后生成 ContextSnapshot
-  -> 后续 ask / summary 使用 snapshot + 当前最新状态
-```
-
-## 安全要求
-
-> 【风险提示】
-> 本项目会运行用户提供的代码。即使只在本地运行，也可能出现死循环、资源占用、读取本机文件、访问网络等风险。
-
-当前行为：
-
-- 第一版已经通过 `run_oj_code` 运行本地代码。
-- CLI 会提醒 `/run` 会执行当前代码。
-- 运行结果会结构化返回。
-
-第二版预期：
-
-- API 仍然只面向本地开发环境。
-- 不开放远程公网服务。
-- 不默认持久化用户完整代码。
-- 不在前端保存 API Key、Token、私钥等敏感信息。
-- 运行用户代码时继续保留超时限制。
-- 不把临时编译产物写入项目目录。
-
-后续如果要暴露到远程服务器，必须重新设计沙箱和权限隔离。
-
-## 实施计划
-
-### 阶段 0：当前已完成
-
-- 新增 `OJCoachSession`。
-- 新增 `OJCoachCommandRouter`。
-- `oj_coach_main.py` 已变成薄 CLI。
-- 已补充 session 和 command router 测试。
-
-### 阶段 1：本地 API 层
-
-新增：
-
-```text
-oj_coach/api.py
-```
-
-任务：
-
-- 引入 FastAPI 依赖。
-- 实现内存 session 管理。
-- 实现 `/api/sessions`。
-- 实现 `/api/sessions/{session_id}/status`。
-- 实现 `/api/sessions/{session_id}/command`。
-- 实现 `/api/sessions/{session_id}/command/stream`。
-- 给 API 层补测试。
-
-验收标准：
-
-- CLI 不受影响。
-- API 可以执行 `/status`、`/paste_problem`、`/paste_code`、`/run`。
-- `/ask` 可以走流式输出。
-
-### 阶段 2：前端工程骨架
-
-新增：
-
-```text
-frontend/
-```
-
-任务：
-
-- 初始化 Vite + React + TypeScript。
-- 建立 API client。
-- 建立全局 session 状态。
-- 实现顶部工具栏。
-- 实现底部命令输入框。
-- 实现基础对话消息列表。
-
-验收标准：
-
-- 页面启动后自动创建 session。
-- 输入 `/status` 能看到后端返回。
-- 普通问题能转成 `/ask`。
-
-### 阶段 3：可拖动工作台布局
-
-任务：
-
-- 引入 `react-resizable-panels`。
-- 实现左右分栏。
-- 实现左侧题目 / 代码 / 测试用例三块可调高度。
-- 对话框占右侧完整区域。
-- 底部命令输入框固定在底部。
-
-验收标准：
-
-- 桌面宽屏下布局稳定。
-- 面板拖动不会遮挡文本。
-- 窗口缩放后仍可使用。
-
-### 阶段 4：题目、代码、测试用例联动
-
-任务：
-
-- 题目框接 `/paste_problem`。
-- 代码框接 `/paste_code <language>`。
-- 测试用例框接 `/set_cases`。
-- 运行按钮或 `/run` 同步当前代码后运行。
-- 渲染测试用例通过情况。
-
-验收标准：
-
-- 粘贴 A+B 题目和 Python AC 代码后可以运行通过。
-- Wrong Answer、Runtime Error、Compile Error 至少能在 UI 中清楚展示。
-
-### 阶段 5：流式对话和复盘
-
-任务：
-
-- `/ask` 使用 SSE 流式渲染。
-- `/summary` 渲染规则版复盘和 LLM 讲解版复盘。
-- 对话框记录用户问题、系统消息、运行结果和 LLM 回复。
-
-验收标准：
-
-- 用户追问时能看到流式输出。
-- LLM 不可用时 UI 能显示明确提示。
-
-### 阶段 6：事件日志和上下文压缩预留
-
-任务：
-
-- 增加 session event log。
-- 每次命令执行后记录事件。
-- 新增 `ContextCompressor` 骨架。
-- `ask` 构造上下文时预留 snapshot 注入位置。
-
-验收标准：
-
-- 不影响现有问答和运行。
-- 可以查看当前事件数量和最近事件。
-- 压缩功能关闭时行为与当前一致。
-
-### 阶段 7：上下文压缩正式接入
-
-任务：
-
-- 设置压缩触发阈值。
-- 用 LLM 生成 `ContextSnapshot`。
-- 后续追问使用 snapshot + 最新状态。
-- 为压缩结果补测试或可回放用例。
-
-验收标准：
-
-- 长对话后仍能保留题目、代码、错误定位和关键结论。
-- 压缩不会覆盖最新代码和最新运行结果。
-- 压缩失败时自动回退到未压缩上下文。
-
-## 暂不做
-
-- 不做公网部署。
-- 不做多用户权限系统。
-- 不做远程代码执行服务。
-- 不做平台专属 `class Solution` 自动驱动。
-- 不做完整持久化题库。
-- 不默认保存完整用户代码。
-- 不在前端保存敏感凭据。
-
-## 下一步建议
-
-下一步优先做阶段 1：本地 API 层。
-
-理由：
-
-- 前端需要稳定的本地接口。
-- CLI 已经足够薄，可以继续保留。
-- `OJCoachCommandRouter` 已经统一了 `/` 命令，API 只需要包装它。
-- API 打通后，前端可以快速接入 `/status`、`/run`、`/ask`。
+C++ / Java 相关测试依赖本机已安装对应编译器或 JDK。FastAPI 相关测试依赖 `fastapi`、`uvicorn`、`sse-starlette` 等 Web 依赖。
+
+## 当前限制
+
+- 当前代码执行不是完整沙箱，不能运行不可信代码。
+- Web/API 会话保存在内存中，服务重启后会话消失。
+- 会话 30 分钟无活动会被后台任务清理。
+- 不做公网部署、多用户权限和远程代码执行服务。
+- 不默认持久化完整题目和完整代码。
+- 不支持 JavaScript 运行。
+- 不支持 LeetCode 风格 `class Solution` 自动驱动。
+- C++ 依赖本机 `g++`，Java 依赖本机 JDK。
+- WebUI 编辑器能力依赖 CDN；离线时会降级，语法高亮可能不可用。
+- CLI/API 的 `/load_problem` 支持 `.txt`、`.md`、`.docx`；WebUI 文件上传是浏览器侧文本读取，支持的扩展名更多。
+- CLI/API 的 `/load_code` 支持 `.py`、`.cpp`、`.java`；WebUI 上传还会识别 `.cc`、`.cxx`，`.txt` 保留当前语言选择。
+- `main.py` 和 `coding_tools/` 仍保留通用 Coding Agent 课程示例能力，但 OJ 刷题推荐使用 `server.py` 或 `oj_coach_main.py`。
+
+## 安全约定
+
+- `.env` 可以放本地配置，但不要提交真实密钥。
+- 后端 `/api/status/llm` 只返回 API Key 是否已配置，不返回真实值。
+- 事件日志默认记录命令、输入长度、输出长度和状态，不记录完整题目或完整代码。
+- 运行代码只写入临时目录，不把用户代码保存到项目目录。
+- 如果未来要部署到远程服务器或开放给他人使用，必须先补充真正的沙箱、资源隔离、认证和权限控制。
