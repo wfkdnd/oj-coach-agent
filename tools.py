@@ -1,8 +1,5 @@
 """
-第2章产出：ToolRegistry
-========================
-
-补全这个类，让 tests/test_tools.py 全部通过。
+ToolRegistry
 """
 
 from __future__ import annotations

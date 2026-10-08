@@ -1,8 +1,5 @@
 """
-第4章产出：Memory
-==================
-
-补全这个类，让 tests/test_memory.py 全部通过。
+Memory
 """
 
 from __future__ import annotations

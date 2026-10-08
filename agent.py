@@ -1,8 +1,5 @@
 """
-第3章产出：Agent 主循环
-========================
-
-补全这个类，让 tests/test_agent.py 全部通过。
+Agent 主循环
 
 核心逻辑：Agent = LLM + Tools + Loop
 """
@@ -32,10 +29,10 @@ class Agent:
         for _ in range(max_iterations):
             resp = self.llm.client.chat.completions.create(
                 model=self.llm.model,
-                messages=messages,
-                tools=tools,
+                messages=messages, 
+                tools=tools, 
                 stream=True,
-            )
+            ) 
             content_parts = []
             tool_calls_map = {}
             for chunk in resp:
