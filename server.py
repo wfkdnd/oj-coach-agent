@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from dotenv import dotenv_values
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -142,38 +143,23 @@ async def index():
     return HTMLResponse("<h1>OJ Coach Agent</h1><p>前端页面尚未创建。</p>")
 
 
-# ── LLM 健康检查 API ──────────────────────────────────────
+# ── LLM 配置状态 API ──────────────────────────────────────
 
 @app.get("/api/status/llm")
 async def check_llm_status():
-    """返回 LLM 配置状态；API Key 只返回是否配置，绝不返回真实值。"""
-    from _env import get_base_url, get_api_key, get_model_id
-
-    values = {"base_url": "", "model": "", "api_key_configured": False}
-    errors: list[str] = []
-    getters = (
-        ("base_url", get_base_url),
-        ("api_key", get_api_key),
-        ("model", get_model_id),
-    )
-    for field, getter in getters:
-        try:
-            value = getter()
-            if field == "api_key":
-                # 真实密钥不能进入响应、前端 DOM 或浏览器日志。
-                values["api_key_configured"] = bool(value)
-            else:
-                values[field] = value
-        except EnvironmentError as exc:
-            errors.append(str(exc))
-
-    available = bool(
-        values["base_url"] and values["model"] and values["api_key_configured"]
-    )
+    """直接读取项目根目录 .env；API Key 只返回是否配置。"""
+    config = dotenv_values(Path(__file__).resolve().with_name(".env"))
+    missing = [name for name in ("BASE_URL", "API_KEY", "MODEL_ID") if not config.get(name)]
+    values = {
+        "base_url": config.get("BASE_URL") or "",
+        "model": config.get("MODEL_ID") or "",
+        # 真实密钥不能进入响应、前端 DOM 或浏览器日志。
+        "api_key_configured": bool(config.get("API_KEY")),
+    }
     return {
         "ok": True,
-        "llm_available": available,
-        "reason": "；".join(errors),
+        "llm_available": not missing,
+        "reason": f"请在 .env 中设置 {' / '.join(missing)}" if missing else "",
         **values,
     }
 
