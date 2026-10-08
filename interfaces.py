@@ -1,27 +1,26 @@
 """
-my-agent 接口定义
-=================
+接口定义
 
-所有模块的接口在这里定义。每章实现对应的类，最终第6章组装。
-这个文件不需要改动，只是接口参考。
+所有模块的接口在这里定义。
+这个文件作为接口参考，不参与运行时调用。
 """
 
 from __future__ import annotations
 
-from typing import Generator, Any, Callable
+from typing import Any, Callable, Generator
 
 
 # ============================================================
-# 第1章: LLMClient
+# LLMClient
 # ============================================================
 class BaseLLMClient:
     """LLM 客户端接口。"""
 
-    def chat(self, messages: list[dict], **kwargs) -> str:
+    def chat(self, messages: list[dict], **kwargs: Any) -> str:
         """非流式调用，返回完整回复文本。"""
         raise NotImplementedError
 
-    def chat_stream(self, messages: list[dict], **kwargs) -> Generator[str, None, None]:
+    def chat_stream(self, messages: list[dict], **kwargs: Any) -> Generator[str, None, None]:
         """流式调用，逐 chunk yield 文本片段。"""
         raise NotImplementedError
 
@@ -29,9 +28,13 @@ class BaseLLMClient:
         """统计文本的 token 数。"""
         raise NotImplementedError
 
+    def embed(self, text: str, model: str | None = None) -> list[float]:
+        """获取文本的向量表示。"""
+        raise NotImplementedError
+
 
 # ============================================================
-# 第2章: ToolRegistry
+# ToolRegistry
 # ============================================================
 class BaseToolRegistry:
     """工具注册表接口。"""
@@ -50,7 +53,7 @@ class BaseToolRegistry:
 
 
 # ============================================================
-# 第3章: Agent
+# Agent
 # ============================================================
 class BaseAgent:
     """Agent 主循环接口。"""
@@ -64,7 +67,7 @@ class BaseAgent:
 
 
 # ============================================================
-# 第4章: ContextManager + Memory
+# ContextManager
 # ============================================================
 class BaseContextManager:
     """上下文管理器接口。"""
@@ -78,6 +81,9 @@ class BaseContextManager:
         raise NotImplementedError
 
 
+# ============================================================
+# Memory
+# ============================================================
 class BaseMemory:
     """向量记忆接口。"""
 

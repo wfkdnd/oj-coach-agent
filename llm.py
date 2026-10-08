@@ -1,124 +1,71 @@
 """
-第1章产出：LLMClient
-=====================
+LLMClient
 
-补全这个类，让 tests/test_llm.py 全部通过。
+提供非流式对话、流式对话、token 统计和文本向量接口。
 
 依赖：
   - openai SDK
   - tiktoken
-  - 环境变量：BASE_URL / API_KEY / MODEL_ID
+  - 项目根目录 .env：BASE_URL / API_KEY / MODEL_ID / EMBEDDING_MODEL
 """
 
 from __future__ import annotations
 
-import os
-import time
+from pathlib import Path
 from typing import Generator
 
 import tiktoken
-from dotenv import load_dotenv
-from openai import OpenAI, APIError, APITimeoutError, RateLimitError, APIConnectionError
-
-from _env import get_base_url, get_api_key, get_model_id
-
-load_dotenv()
-
-# 重试配置
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 1.0  # 基础等待秒数
-RETRYABLE_ERRORS = (APITimeoutError, RateLimitError, APIConnectionError)
-
-
-def _retry_with_backoff(func, *args, **kwargs):
-    """带指数退避的重试包装器。"""
-    last_error = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            return func(*args, **kwargs)
-        except RETRYABLE_ERRORS as e:
-            last_error = e
-            if attempt >= MAX_RETRIES:
-                raise
-            delay = RETRY_BASE_DELAY * (2 ** attempt)
-            print(f"[LLM] 请求失败 (第{attempt+1}次): {type(e).__name__}, {delay:.1f}s 后重试...")
-            time.sleep(delay)
-    raise last_error  # type: ignore[misc]
+from dotenv import dotenv_values
+from openai import OpenAI
 
 
 class LLMClient:
     def __init__(self):
-        self.client = OpenAI(base_url=get_base_url(), api_key=get_api_key())
-        self.model = get_model_id()
+        config = dotenv_values(Path(__file__).resolve().with_name(".env"))
+        base_url = config.get("BASE_URL")
+        api_key = config.get("API_KEY")
+        model = config.get("MODEL_ID")
+        if not base_url or not api_key or not model:
+            missing = [name for name in ("BASE_URL", "API_KEY", "MODEL_ID") if not config.get(name)]
+            raise EnvironmentError(f"请在 .env 中设置 {' / '.join(missing)}")
+
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
+        self.model = model
+        self.embedding_model = config.get("EMBEDDING_MODEL")
         self.enc = tiktoken.get_encoding("cl100k_base")
 
-    @staticmethod
-    def _delta_text(chunk) -> str | None:
-        """提取单个 chunk 中的文本内容。
-        优先取 content，若无则取 reasoning_content（兼容思维链模型如 glm-5.0）。"""
-        if not chunk.choices:
-            return None
-        delta = chunk.choices[0].delta
-        content = getattr(delta, "content", None)
-        if content:
-            return content
-        return getattr(delta, "reasoning_content", None) or None
-
     def chat(self, messages: list[dict], **kwargs) -> str:
-        """以流式请求调用模型，并在本地收集成完整回复文本。
-
-        云开发的 OpenAI 兼容接口拒绝 ``stream=False``。这里保留 ``chat``
-        的字符串返回契约，但发往服务端的请求始终是流式的，从而让结构化提取、
-        上下文压缩等需要完整文本的内部流程也能在云端运行。
-        """
-        kwargs.pop("stream", None)
-
-        def _call():
-            return self.client.chat.completions.create(
-                model=self.model, messages=messages, stream=True, **kwargs
-            )
-        resp = _retry_with_backoff(_call)
-        content_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        for chunk in resp:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            content = getattr(delta, "content", None)
-            reasoning = getattr(delta, "reasoning_content", None)
-            if content:
-                content_parts.append(content)
-            elif reasoning:
-                reasoning_parts.append(reasoning)
-
-        # 结构化任务优先使用最终 content，避免把思维过程混入 JSON；
-        # 某些模型只返回 reasoning_content 时再将其作为兼容兜底。
-        return "".join(content_parts or reasoning_parts)
+        """非流式调用，返回完整回复文本。"""
+        kwargs.pop("stream", None)  # 移除 stream 参数，确保非流式调用
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages, 
+            stream=False,
+            **kwargs,
+        )
+        return resp.choices[0].message.content or ""
 
     def chat_stream(self, messages: list[dict], **kwargs) -> Generator[str, None, None]:
-        """流式调用，逐 chunk yield 文本片段。兼容 reasoning_content (思维链模型)。"""
-        kwargs.pop("stream", None)
-
-        def _call():
-            return self.client.chat.completions.create(
-                model=self.model, messages=messages, stream=True, **kwargs
-            )
-        resp = _retry_with_backoff(_call)
+        """流式调用，逐 chunk yield 文本片段。"""
+        kwargs.pop("stream", None)  # 移除 stream 参数，确保流式调用
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages, 
+            stream=True,
+            **kwargs,
+        )
         for chunk in resp:
-            text = self._delta_text(chunk)
-            if text:
-                yield text
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
 
     def count_tokens(self, text: str) -> int:
         """统计文本的 token 数。"""
         return len(self.enc.encode(text))
 
     def embed(self, text: str, model: str | None = None) -> list[float]:
-        """获取文本的向量表示，带重试保护。"""
-        model = model or os.getenv("EMBEDDING_MODEL", "hunyuan-embedding")
-
-        def _call():
-            return self.client.embeddings.create(model=model, input=text)
-
-        resp = _retry_with_backoff(_call)
+        """获取文本的向量表示。"""
+        model = model or self.embedding_model
+        if not model:
+            raise EnvironmentError("请在 .env 中设置 EMBEDDING_MODEL，或通过 model 参数指定向量模型")
+        resp = self.client.embeddings.create(model=model, input=text)
         return resp.data[0].embedding
